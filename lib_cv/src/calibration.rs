@@ -4,28 +4,54 @@ use opencv::objdetect::{CharucoBoard, CharucoDetector};
 use opencv::prelude::*;
 use opencv::{self, Error};
 
-fn get_charuco(
-    charuco_board: CharucoBoard,
-    img: Mat,
-) -> Result<(opencv::core::Mat, opencv::core::Mat), Error> {
-    let charuco_detector = CharucoDetector::new_def(&charuco_board)?;
+pub fn get_charuco(
+    charuco_board: &CharucoBoard,
+    img: &Mat,
+) -> Result<
+    (
+        Vector<Vector<Point2f>>,
+        Vector<i32>,
+        Vector<Point2f>,
+        Vector<i32>,
+        Mat,
+        Mat,
+    ),
+    Error,
+> {
+    let charuco_detector = CharucoDetector::new_def(charuco_board)?;
     let mut charuco_corners: Vector<Point2f> = Vector::new();
     let mut charuco_ids: Vector<i32> = Vector::new();
-    charuco_detector.detect_board_def(&img, &mut charuco_corners, &mut charuco_ids)?;
+    let mut marker_corners: Vector<Vector<Point2f>> = Vector::new();
+    let mut marker_ids: Vector<i32> = Vector::new();
+    charuco_detector.detect_board(
+        &img,
+        &mut charuco_corners,
+        &mut charuco_ids,
+        &mut marker_corners,
+        &mut marker_ids,
+    )?;
+    print!("{}", charuco_corners.len());
 
     let mut obj_points: Mat = Mat::default();
     let mut img_points: Mat = Mat::default();
-    charuco_board.match_image_points(
+    let _ = charuco_board.match_image_points(
         &charuco_corners,
         &charuco_ids,
         &mut obj_points,
         &mut img_points,
-    )?;
+    );
 
-    Ok((obj_points, img_points))
+    Ok((
+        marker_corners,
+        marker_ids,
+        charuco_corners,
+        charuco_ids,
+        obj_points,
+        img_points,
+    ))
 }
 
-fn calibrate_with_charuco(
+pub fn calibrate_with_charuco(
     imgs: Vector<Mat>,
     charuco_board: CharucoBoard,
 ) -> Result<
