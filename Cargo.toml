@@ -1,5 +1,5 @@
 [workspace]
-members = ["bin_for_test_launch", "lib_cv"]
+members = ["calibration_app", "lib_cv"]
 resolver = "2"
 
 [workspace.dependencies]
