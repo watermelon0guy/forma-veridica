@@ -1,7 +1,11 @@
 use std::collections::HashSet;
+use std::fs;
 
 use opencv::calib3d::{calibrate_camera, stereo_calibrate};
-use opencv::core::{Point2f, TermCriteria, TermCriteria_Type, Vector};
+use opencv::core::{
+    FileStorage, FileStorage_Mode, Point2f, TermCriteria, TermCriteria_Type, Vector,
+};
+use opencv::imgcodecs::{IMREAD_COLOR, imread};
 use opencv::objdetect::{CharucoBoard, CharucoDetector};
 use opencv::prelude::*;
 use opencv::{self, Error};
@@ -348,4 +352,101 @@ pub fn find_common_points(frames: &[Vector<i32>]) -> HashSet<i32> {
     }
 
     common_ids
+}
+
+pub fn perform_calibration(image_path: &str, charuco_board: &CharucoBoard, num_cameras: usize) {
+    println!("Поиск калибровочных изображений в: {}", image_path);
+
+    // Собираем все файлы в директории
+    let dir_entries = match fs::read_dir(image_path) {
+        Ok(entries) => entries,
+        Err(e) => {
+            eprintln!("Ошибка чтения директории: {}", e);
+            return;
+        }
+    };
+
+    // Группируем изображения по камерам и кадрам
+    let mut frame_numbers = Vec::new();
+    let mut camera_images: Vec<Vector<Mat>> = vec![Vector::<Mat>::new(); num_cameras];
+
+    for entry in dir_entries {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+
+        if file_name.starts_with("img_") && file_name.ends_with(".png") {
+            let parts: Vec<&str> = file_name.split('_').collect();
+            if parts.len() == 3 {
+                if let Ok(cam_num) = parts[1].parse::<usize>() {
+                    if let Ok(frame_num) = parts[2].trim_end_matches(".png").parse::<usize>() {
+                        if let Ok(img) = imread(&entry.path().to_string_lossy(), IMREAD_COLOR) {
+                            camera_images[cam_num - 1].push(img);
+                            frame_numbers.push(frame_num);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Удаляем дубликаты frame_numbers и сортируем
+    frame_numbers.sort();
+    frame_numbers.dedup();
+
+    println!("Найдено {} наборов(сцен) изображений", frame_numbers.len());
+
+    // Выполняем калибровку
+    match calibrate_multiple_with_charuco(&camera_images, charuco_board) {
+        Ok(cameras) => {
+            println!(
+                "Калибровка успешно завершена. Получено {} камер:",
+                cameras.len()
+            );
+            for (i, cam) in cameras.iter().enumerate() {
+                println!("\nКамера {}:", i + 1);
+                println!("Матрица внутренних параметров:");
+                println!("{:?}", cam.intrinsic);
+                println!("Коэффициенты искажения:");
+                println!("{:?}", cam.distortion);
+
+                if i > 0 {
+                    println!("Матрица вращения относительно основной камеры:");
+                    println!("{:?}", cam.rotation);
+                    println!("Вектор трансляции относительно основной камеры:");
+                    println!("{:?}", cam.translation);
+                }
+            }
+
+            // Сохранение параметров в файл (опционально)
+            if let Err(e) =
+                save_camera_parameters(&cameras, &format!("{}calibration_params.yml", image_path))
+            {
+                eprintln!("Ошибка при сохранении параметров: {}", e);
+            }
+        }
+        Err(e) => eprintln!("Ошибка при калибровке: {:?}", e),
+    }
+}
+
+fn save_camera_parameters(cameras: &[CameraParameters], path: &str) -> opencv::Result<()> {
+    let mut fs = FileStorage::new(path, FileStorage_Mode::WRITE as i32, "")?;
+
+    for (i, cam) in cameras.iter().enumerate() {
+        // Для матриц используем специальные методы записи
+        fs.write_mat(&format!("camera_{}_intrinsic", i), &cam.intrinsic)?;
+        fs.write_mat(&format!("camera_{}_distortion", i), &cam.distortion)?;
+
+        if i > 0 {
+            fs.write_mat(&format!("camera_{}_rotation", i), &cam.rotation)?;
+            fs.write_mat(&format!("camera_{}_translation", i), &cam.translation)?;
+        }
+    }
+
+    fs.release()?;
+    Ok(())
 }
