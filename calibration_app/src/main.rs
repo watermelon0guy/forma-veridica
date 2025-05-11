@@ -1,14 +1,17 @@
-use lib_cv::calibration::{self, get_charuco};
+use std::fs;
+
+use lib_cv::calibration::{self, CameraParameters, get_charuco};
 use lib_cv::utils::{combine_quadrants, split_image_into_quadrants};
-use opencv::core::{Scalar, Size};
-use opencv::features2d::{DrawMatchesFlags, draw_keypoints, draw_matches_knn_def};
-use opencv::gapi::crop;
+use opencv::core::{Scalar, Vector};
 use opencv::imgcodecs;
-use opencv::objdetect::{CharucoBoard, draw_detected_corners_charuco, draw_detected_markers};
+use opencv::objdetect::{CharucoBoard, draw_detected_corners_charuco};
 use opencv::videoio::{CAP_PROP_POS_FRAMES, VideoCapture};
 use opencv::{highgui, prelude::*};
 
 fn main() {
+    const IMAGE_PATH: &str =
+        "/home/watermelon0guy/Изображения/Experiments/raspberry_pi_cardboard/calibration";
+
     highgui::named_window("Charuco Доска", highgui::WINDOW_KEEPRATIO).unwrap();
 
     let mut frames = Vec::new();
@@ -40,7 +43,7 @@ fn main() {
     .unwrap();
 
     let mut current_i = 0;
-    while true {
+    loop {
         let Some(current_frame) = frames.get(current_i) else {
             eprintln!("Не получилось считать кадр");
             continue;
@@ -151,25 +154,140 @@ fn main() {
             81 => {
                 current_i -= 1;
             }
-            32 => {}
+            32 => {
+                let timestamp = current_i.to_string();
+                imgcodecs::imwrite(
+                    &format!("{}/img_1_{}.png", IMAGE_PATH, timestamp),
+                    &img_1,
+                    &opencv::core::Vector::new(),
+                )
+                .unwrap();
+                imgcodecs::imwrite(
+                    &format!("{}/img_2_{}.png", IMAGE_PATH, timestamp),
+                    &img_2,
+                    &Vector::new(),
+                )
+                .unwrap();
+                imgcodecs::imwrite(
+                    &format!("{}/img_3_{}.png", IMAGE_PATH, timestamp),
+                    &img_3,
+                    &Vector::new(),
+                )
+                .unwrap();
+                imgcodecs::imwrite(
+                    &format!("{}/img_4_{}.png", IMAGE_PATH, timestamp),
+                    &img_4,
+                    &Vector::new(),
+                )
+                .unwrap();
+                println!("Изображения сохранены с timestamp: {}", timestamp);
+            }
             27 => break, // Escape key
             _ => {}
         }
-        println!("obj_points_1: {:?}", obj_points_1);
-        println!("charuco_corners_1: {:?}", charuco_corners_1);
-        println!("img_points_1: {:?}", img_points_1);
-        println!("charuco_ids_1: {:?}", charuco_ids_1);
-
-        // let mut image_with_markers = cropped.clone();
-        // draw_detected_markers(
-        //     &mut image_with_markers,
-        //     &marker_corners,
-        //     &marker_ids,
-        //     Scalar::new(255.0, 0.0, 0.0, 255.0),
-        // )
-        // .unwrap();
-
-        // highgui::imshow("Charuco Доска", &image_with_markers).unwrap();
-        // highgui::wait_key(0).unwrap();
     }
+    perform_calibration(IMAGE_PATH, &charuco_board, 4);
+}
+
+fn perform_calibration(image_path: &str, charuco_board: &CharucoBoard, num_cameras: usize) {
+    println!("Поиск калибровочных изображений в: {}", image_path);
+
+    // Собираем все файлы в директории
+    let dir_entries = match fs::read_dir(image_path) {
+        Ok(entries) => entries,
+        Err(e) => {
+            eprintln!("Ошибка чтения директории: {}", e);
+            return;
+        }
+    };
+
+    // Группируем изображения по камерам и кадрам
+    let mut frame_numbers = Vec::new();
+    let mut camera_images: Vec<Vector<Mat>> = vec![Vector::<Mat>::new(); num_cameras];
+
+    for entry in dir_entries {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+
+        if file_name.starts_with("img_") && file_name.ends_with(".png") {
+            let parts: Vec<&str> = file_name.split('_').collect();
+            if parts.len() == 3 {
+                if let Ok(cam_num) = parts[1].parse::<usize>() {
+                    if let Ok(frame_num) = parts[2].trim_end_matches(".png").parse::<usize>() {
+                        if let Ok(img) = imgcodecs::imread(
+                            &entry.path().to_string_lossy(),
+                            imgcodecs::IMREAD_COLOR,
+                        ) {
+                            camera_images[cam_num - 1].push(img);
+                            frame_numbers.push(frame_num);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Удаляем дубликаты frame_numbers и сортируем
+    frame_numbers.sort();
+    frame_numbers.dedup();
+
+    println!("Найдено {} наборов(сцен) изображений", frame_numbers.len());
+
+    // Выполняем калибровку
+    match calibration::calibrate_multiple_with_charuco(&camera_images, charuco_board) {
+        Ok(cameras) => {
+            println!(
+                "Калибровка успешно завершена. Получено {} камер:",
+                cameras.len()
+            );
+            for (i, cam) in cameras.iter().enumerate() {
+                println!("\nКамера {}:", i + 1);
+                println!("Матрица внутренних параметров:");
+                println!("{:?}", cam.intrinsic);
+                println!("Коэффициенты искажения:");
+                println!("{:?}", cam.distortion);
+
+                if i > 0 {
+                    println!("Матрица вращения относительно основной камеры:");
+                    println!("{:?}", cam.rotation);
+                    println!("Вектор трансляции относительно основной камеры:");
+                    println!("{:?}", cam.translation);
+                }
+            }
+
+            // Сохранение параметров в файл (опционально)
+            if let Err(e) =
+                save_camera_parameters(&cameras, &format!("{}calibration_params.yml", image_path))
+            {
+                eprintln!("Ошибка при сохранении параметров: {}", e);
+            }
+        }
+        Err(e) => eprintln!("Ошибка при калибровке: {:?}", e),
+    }
+}
+
+fn save_camera_parameters(cameras: &[CameraParameters], path: &str) -> opencv::Result<()> {
+    use opencv::core::FileStorage;
+    use opencv::core::FileStorage_Mode;
+
+    let mut fs = FileStorage::new(path, FileStorage_Mode::WRITE as i32, "")?;
+
+    for (i, cam) in cameras.iter().enumerate() {
+        // Для матриц используем специальные методы записи
+        fs.write_mat(&format!("camera_{}_intrinsic", i), &cam.intrinsic)?;
+        fs.write_mat(&format!("camera_{}_distortion", i), &cam.distortion)?;
+
+        if i > 0 {
+            fs.write_mat(&format!("camera_{}_rotation", i), &cam.rotation)?;
+            fs.write_mat(&format!("camera_{}_translation", i), &cam.translation)?;
+        }
+    }
+
+    fs.release()?;
+    Ok(())
 }
