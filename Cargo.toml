@@ -1,7 +1,14 @@
 [workspace]
-members = ["calibration_app", "lib_cv"]
+members = ["calibration_app", "lib_cv", "reconstruction_app"]
 resolver = "2"
 
 [workspace.dependencies]
-
-opencv = "0.94.4"
+opencv = { version = "0.94.4", default-features = false, features = [
+    "imgproc",
+    "imgcodecs",
+    "highgui",
+    "videoio",
+    "calib3d",
+    "sfm",
+    "objdetect",
+] }
