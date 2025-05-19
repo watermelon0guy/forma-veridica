@@ -1,9 +1,12 @@
 use opencv::{
     Error,
-    core::{Mat, Point3d, StsError, Vector, multiply},
+    core::{Mat, Point3d, StsError, Vector, gemm, multiply},
     prelude::*,
     sfm::triangulate_points,
 };
+use std::fs::File;
+use std::io::{self, Write};
+use std::path::Path;
 
 use crate::calibration::CameraParameters;
 
@@ -94,9 +97,19 @@ pub fn triangulate_points_multiple(
     for cam in camera_params {
         let mut r_t = Mat::default();
         opencv::core::hconcat2(&cam.rotation, &cam.translation, &mut r_t)?;
-
+        dbg!(&r_t);
+        dbg!(&cam.intrinsic);
         let mut projection_matrix = Mat::default();
-        multiply(&cam.intrinsic, &r_t, &mut projection_matrix, 1.0, -1)?;
+        gemm(
+            &cam.intrinsic,
+            &r_t,
+            1.0,
+            &Mat::default(),
+            0.0,
+            &mut projection_matrix,
+            0,
+        )?;
+        dbg!(&projection_matrix);
         projection_matrices.push(projection_matrix);
     }
 
@@ -134,7 +147,15 @@ pub fn triangulate_points_multiple(
 
             // Проекция на изображение: x' = P * X
             let mut projected = Mat::default();
-            multiply(&projection, &point_4d, &mut projected, 1.0, -1)?;
+            gemm(
+                &projection,
+                &point_4d,
+                1.0,
+                &Mat::default(),
+                0.0,
+                &mut projected,
+                0,
+            )?;
 
             // Нормализуем проекцию
             let p_x = *projected.at_2d::<f64>(0, 0)? / *projected.at_2d::<f64>(2, 0)?;
@@ -160,4 +181,55 @@ pub fn triangulate_points_multiple(
     }
 
     Ok(result)
+}
+
+pub fn save_point_cloud<P: AsRef<Path>>(cloud: &PointCloud, path: P) -> io::Result<()> {
+    let mut file = File::create(path)?;
+
+    // Определяем, сколько точек имеют цвет (для заголовка PLY)
+    let points_with_color = cloud.points.iter().filter(|p| p.color.is_some()).count();
+    let has_color = points_with_color > 0;
+
+    // Записываем заголовок PLY
+    writeln!(file, "ply")?;
+    writeln!(file, "format ascii 1.0")?;
+    writeln!(file, "element vertex {}", cloud.points.len())?;
+    writeln!(file, "property float x")?;
+    writeln!(file, "property float y")?;
+    writeln!(file, "property float z")?;
+
+    // Добавляем свойства цвета, если они есть
+    if has_color {
+        writeln!(file, "property uchar red")?;
+        writeln!(file, "property uchar green")?;
+        writeln!(file, "property uchar blue")?;
+    }
+
+    // Добавляем свойство уверенности
+    writeln!(file, "property float confidence")?;
+
+    // Конец заголовка
+    writeln!(file, "end_header")?;
+
+    // Записываем данные
+    for point in &cloud.points {
+        if has_color {
+            // С цветом
+            let (r, g, b) = point.color.unwrap_or((128, 128, 128));
+            writeln!(
+                file,
+                "{} {} {} {} {} {} {}",
+                point.x, point.y, point.z, r, g, b, point.confidence
+            )?;
+        } else {
+            // Без цвета
+            writeln!(
+                file,
+                "{} {} {} {}",
+                point.x, point.y, point.z, point.confidence
+            )?;
+        }
+    }
+
+    Ok(())
 }

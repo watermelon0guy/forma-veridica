@@ -4,7 +4,7 @@ use opencv::{
     prelude::*,
 };
 
-pub fn split_image_into_quadrants(img: &Mat) -> Result<(Mat, Mat, Mat, Mat), Error> {
+pub fn split_image_into_quadrants(img: &Mat) -> Result<Vec<Mat>, Error> {
     let roi_1 = Mat::roi(
         img,
         opencv::core::Rect::new(0, 0, img.cols() / 2, img.rows() / 2),
@@ -34,7 +34,7 @@ pub fn split_image_into_quadrants(img: &Mat) -> Result<(Mat, Mat, Mat, Mat), Err
     roi_3.copy_to(&mut cropped_3).unwrap();
     let mut cropped_4 = Mat::default();
     roi_4.copy_to(&mut cropped_4).unwrap();
-    Ok((cropped_1, cropped_2, cropped_3, cropped_4))
+    Ok(vec![cropped_1, cropped_2, cropped_3, cropped_4])
 }
 
 pub fn combine_quadrants(

@@ -450,3 +450,42 @@ fn save_camera_parameters(cameras: &[CameraParameters], path: &str) -> opencv::R
     fs.release()?;
     Ok(())
 }
+
+pub fn load_camera_parameters(path: &str) -> opencv::Result<Vec<CameraParameters>> {
+    let mut fs = FileStorage::new(path, FileStorage_Mode::READ as i32, "")?;
+
+    let mut cameras = Vec::new();
+    let mut i = 0;
+
+    loop {
+        let intrinsic_name = format!("camera_{}_intrinsic", i);
+        println!("Попытка считать данные для камеры {}", i);
+        if fs.get_node(&intrinsic_name)?.empty()? {
+            break;
+        }
+
+        let mut cam_params = CameraParameters::new()?;
+
+        cam_params.intrinsic = fs.get_node(&intrinsic_name)?.mat()?;
+        cam_params.distortion = fs.get_node(&format!("camera_{}_distortion", i))?.mat()?;
+
+        if i > 0 {
+            cam_params.rotation = fs.get_node(&format!("camera_{}_rotation", i))?.mat()?;
+            cam_params.translation = fs.get_node(&format!("camera_{}_translation", i))?.mat()?;
+        }
+
+        cameras.push(cam_params);
+        i += 1;
+    }
+
+    fs.release()?;
+
+    if cameras.is_empty() {
+        return Err(opencv::Error::new(
+            opencv::core::StsError as i32,
+            "Не удалось загрузить параметры ни одной камеры".to_string(),
+        ));
+    }
+
+    Ok(cameras)
+}
