@@ -3,7 +3,7 @@ use std::fs;
 
 use opencv::calib3d::{calibrate_camera, stereo_calibrate};
 use opencv::core::{
-    FileStorage, FileStorage_Mode, Point2f, TermCriteria, TermCriteria_Type, Vector,
+    FileStorage, FileStorage_Mode, Point2f, TermCriteria, TermCriteria_Type, Vector, norm,
 };
 use opencv::imgcodecs::{IMREAD_COLOR, imread};
 use opencv::objdetect::{CharucoBoard, CharucoDetector};
@@ -149,6 +149,8 @@ pub fn calibrate_multiple_with_charuco(
     imgs: &Vec<Vector<Mat>>,
     charuco_board: &CharucoBoard,
 ) -> Result<Vec<CameraParameters>, opencv::Error> {
+    println!("=== Начало калибровки множества камер ===");
+    println!("Параметры доски ChArUco: {:?}", charuco_board);
     let mut ret: Vec<f64> = Vec::default();
     let mut camera_matrix: Vec<Mat> = Vec::default();
     let mut dist_coeffs: Vec<Mat> = Vec::default();
@@ -164,6 +166,11 @@ pub fn calibrate_multiple_with_charuco(
         return Ok(vec![]);
     }
 
+    println!(
+        "Количество наборов изображений для калибровки: {}",
+        imgs.len()
+    );
+
     for img_set in imgs {
         match calibrate_with_charuco(img_set, charuco_board) {
             Ok((
@@ -177,6 +184,7 @@ pub fn calibrate_multiple_with_charuco(
                 curr_cam_all_charuco_ids,
                 curr_cam_charuco_corners,
             )) => {
+                println!("Ошибка обычной калибровки {}", curr_cam_ret_val);
                 ret.push(curr_cam_ret_val);
                 camera_matrix.push(curr_cam_camera_matrix_val);
                 dist_coeffs.push(curr_cam_dist_coeffs_val);
@@ -219,7 +227,16 @@ pub fn calibrate_multiple_with_charuco(
             let ids_cam2 = &charuco_ids[i].get(frame_idx)?;
 
             let common: HashSet<i32> = find_common_points(&[ids_cam1.clone(), ids_cam2.clone()]);
+            println!(
+                "Камера 0 и камера {}: найдено {} общих точек",
+                i,
+                common.len()
+            );
             if common.len() < 10 {
+                println!(
+                    "ВНИМАНИЕ: недостаточно общих точек между камерой 0 и камерой {}",
+                    i
+                );
                 continue;
             }
 
@@ -237,12 +254,34 @@ pub fn calibrate_multiple_with_charuco(
                 }
             }
 
-            common_object_points.push(select_rows(&object_points[0].get(frame_idx)?, &idx_cam1)?);
-            common_image_points1.push(select_rows(&image_points[0].get(frame_idx)?, &idx_cam1)?);
-            common_image_points2.push(select_rows(&image_points[i].get(frame_idx)?, &idx_cam2)?);
+            let obj_points = select_rows(&object_points[0].get(frame_idx)?, &idx_cam1)?;
+            let img_points1 = select_rows(&image_points[0].get(frame_idx)?, &idx_cam1)?;
+            let img_points2 = select_rows(&image_points[i].get(frame_idx)?, &idx_cam2)?;
+
+            println!(
+                "Кадр {}, Камера 0 и {}: выбрано {} 3D точек, {} точек на изображении 1, {} точек на изображении 2",
+                frame_idx,
+                i,
+                obj_points.rows(),
+                img_points1.rows(),
+                img_points2.rows()
+            );
+
+            common_object_points.push(obj_points);
+            common_image_points1.push(img_points1);
+            common_image_points2.push(img_points2);
         }
 
         let img_size = imgs[0].get(0)?.size()?;
+
+        println!(
+            "=== Подготовка к стерео калибровке камеры 0 и камеры {} ===",
+            i
+        );
+        println!(
+            "Количество кадров с общими точками: {}",
+            common_object_points.len()
+        );
 
         // Надо временно поделить на несколько частей, так как иначе получим множественное заимствование.
         let mut cam_1_matrix = camera_matrix[0].clone();
@@ -250,12 +289,24 @@ pub fn calibrate_multiple_with_charuco(
         let mut cam_2_matrix = camera_matrix[i].clone();
         let mut cam_2_dist = dist_coeffs[i].clone();
 
+        println!("Матрица камеры 0 до стерео калибровки:\n{:?}", cam_1_matrix);
+        println!("Дисторсия камеры 0 до стерео калибровки:\n{:?}", cam_1_dist);
+        println!(
+            "Матрица камеры {} до стерео калибровки:\n{:?}",
+            i, cam_2_matrix
+        );
+        println!(
+            "Дисторсия камеры {} до стерео калибровки:\n{:?}",
+            i, cam_2_dist
+        );
+
         let mut r = Mat::default();
         let mut t = Mat::default();
         let mut e = Mat::default();
         let mut f = Mat::default();
 
-        let _ = stereo_calibrate(
+        println!("Выполнение stereo_calibrate...");
+        let stereo_error = stereo_calibrate(
             &common_object_points,
             &common_image_points1,
             &common_image_points2,
@@ -272,11 +323,38 @@ pub fn calibrate_multiple_with_charuco(
             criteria,
         )?;
 
-        // Обновляем ориг. матрицы
-        camera_matrix[0] = cam_1_matrix;
-        dist_coeffs[0] = cam_1_dist;
-        camera_matrix[i] = cam_2_matrix;
-        dist_coeffs[i] = cam_2_dist;
+        println!(
+            "Ошибка стерео калибровки для камеры {}: {}",
+            i, stereo_error
+        );
+        println!(
+            "Матрица камеры 0 после стерео калибровки:\n{:?}",
+            cam_1_matrix
+        );
+        println!(
+            "Дисторсия камеры 0 после стерео калибровки:\n{:?}",
+            cam_1_dist
+        );
+        println!(
+            "Матрица камеры {} после стерео калибровки:\n{:?}",
+            i, cam_2_matrix
+        );
+        println!(
+            "Дисторсия камеры {} после стерео калибровки:\n{:?}",
+            i, cam_2_dist
+        );
+        println!("Матрица вращения:\n{:?}", r);
+        println!("Вектор трансляции:\n{:?}", t);
+
+        // Вычисляем норму вектора трансляции для получения расстояния
+        let t_norm = norm(&t, opencv::core::NORM_L2, &Mat::default())?;
+        println!("Расстояние между камерой 0 и камерой {}: {} мм", i, t_norm);
+
+        // Удаляем обновление матриц камеры
+        // camera_matrix[0] = cam_1_matrix;
+        // dist_coeffs[0] = cam_1_dist;
+        // camera_matrix[i] = cam_2_matrix;
+        // dist_coeffs[i] = cam_2_dist;
 
         cameras.push(CameraParameters {
             intrinsic: camera_matrix[i].clone(),
@@ -286,7 +364,14 @@ pub fn calibrate_multiple_with_charuco(
             essential_matrix: e,
             fundamental_matrix: f,
         });
+
+        println!("=== Калибровка камеры {} завершена ===", i);
     }
+    println!("=== Калибровка множества камер завершена ===");
+
+    // Анализируем расстояния между камерами
+    let _ = calculate_adjacent_camera_distances(&cameras);
+
     Ok(cameras)
 }
 
@@ -314,6 +399,63 @@ pub struct CameraParameters {
     pub translation: Mat,
     pub essential_matrix: Mat,
     pub fundamental_matrix: Mat,
+}
+
+/// Вычисляет расстояния между соседними камерами и возвращает их в виде вектора
+pub fn calculate_adjacent_camera_distances(
+    cameras: &[CameraParameters],
+) -> Result<Vec<f64>, opencv::Error> {
+    println!("\n=== Анализ расстояний между соседними камерами ===");
+
+    if cameras.len() < 2 {
+        println!("Недостаточно камер для анализа расстояний");
+        return Ok(Vec::new());
+    }
+
+    let mut distances = Vec::with_capacity(cameras.len() - 1);
+
+    for i in 1..cameras.len() {
+        let t = &cameras[i].translation;
+        let t_norm = norm(t, opencv::core::NORM_L2, &Mat::default())?;
+
+        // Получаем компоненты вектора трансляции
+        let tx = t.at_2d::<f64>(0, 0)?;
+        let ty = t.at_2d::<f64>(1, 0)?;
+        let tz = t.at_2d::<f64>(2, 0)?;
+
+        println!("Камера {} → Камера 0:", i);
+        println!("  Полное расстояние: {:.2} мм", t_norm);
+        println!(
+            "  Компоненты вектора: X={:.2} мм, Y={:.2} мм, Z={:.2} мм",
+            tx, ty, tz
+        );
+
+        // Если это не первая камера (т.е. i > 1), также вычисляем относительное расстояние
+        // от предыдущей камеры
+        if i > 1 {
+            let prev_t = &cameras[i - 1].translation;
+            let prev_tx = prev_t.at_2d::<f64>(0, 0)?;
+            let prev_ty = prev_t.at_2d::<f64>(1, 0)?;
+            let prev_tz = prev_t.at_2d::<f64>(2, 0)?;
+
+            let rel_tx = tx - prev_tx;
+            let rel_ty = ty - prev_ty;
+            let rel_tz = tz - prev_tz;
+            let rel_t_norm = (rel_tx * rel_tx + rel_ty * rel_ty + rel_tz * rel_tz).sqrt();
+
+            println!("  Относительно камеры {}:", i - 1);
+            println!("    Относительное расстояние: {:.2} мм", rel_t_norm);
+            println!(
+                "    Относительные компоненты: X={:.2} мм, Y={:.2} мм, Z={:.2} мм",
+                rel_tx, rel_ty, rel_tz
+            );
+        }
+
+        distances.push(t_norm);
+    }
+
+    println!("=== Конец анализа расстояний ===\n");
+    Ok(distances)
 }
 
 impl CameraParameters {
@@ -378,6 +520,7 @@ pub fn perform_calibration(image_path: &str, charuco_board: &CharucoBoard, num_c
 
         let file_name = entry.file_name();
         let file_name = file_name.to_string_lossy();
+        println!("Загружаю {}", file_name);
 
         if file_name.starts_with("img_") && file_name.ends_with(".png") {
             let parts: Vec<&str> = file_name.split('_').collect();
@@ -419,12 +562,19 @@ pub fn perform_calibration(image_path: &str, charuco_board: &CharucoBoard, num_c
                     println!("{:?}", cam.rotation);
                     println!("Вектор трансляции относительно основной камеры:");
                     println!("{:?}", cam.translation);
+                    println!(
+                        "Дистанция от основной камеры: {:.2} мм",
+                        (cam.translation.at_2d::<f64>(0, 0).unwrap().powi(2)
+                            + cam.translation.at_2d::<f64>(1, 0).unwrap().powi(2)
+                            + cam.translation.at_2d::<f64>(2, 0).unwrap().powi(2))
+                        .sqrt()
+                    );
                 }
             }
 
             // Сохранение параметров в файл (опционально)
             if let Err(e) =
-                save_camera_parameters(&cameras, &format!("{}calibration_params.yml", image_path))
+                save_camera_parameters(&cameras, &format!("{}/calibration_params.yml", image_path))
             {
                 eprintln!("Ошибка при сохранении параметров: {}", e);
             }

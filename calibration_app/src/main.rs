@@ -3,29 +3,36 @@ use lib_cv::utils::{combine_quadrants, split_image_into_quadrants};
 use opencv::core::{Scalar, Vector};
 use opencv::imgcodecs;
 use opencv::objdetect::draw_detected_corners_charuco;
-use opencv::videoio::{CAP_PROP_POS_FRAMES, VideoCapture};
+use opencv::videoio::VideoCapture;
 use opencv::{highgui, prelude::*};
 
 fn main() {
-    const IMAGE_PATH: &str =
-        "/home/watermelon0guy/Изображения/Experiments/raspberry_pi_cardboard/calibration";
-
+    const PICKED_IMAGE_PATH: &str =
+        "/home/watermelon0guy/Изображения/Experiments/raspberry_pi_cardboard/calibration/picked";
+    const PARSED_IMAGE_PATH: &str =
+        "/home/watermelon0guy/Изображения/Experiments/raspberry_pi_cardboard/calibration/parsed";
     highgui::named_window("Charuco Доска", highgui::WINDOW_KEEPRATIO).unwrap();
 
-    let mut frames = Vec::new();
+    let mut frame_index_name = 0;
 
     {
         let mut cap = VideoCapture::from_file(
-        "/home/watermelon0guy/Видео/Experiments/raspberry_pi_cardboard/20250427_095907_hires.mp4",
+        "/home/watermelon0guy/Видео/Experiments/raspberry_pi_cardboard/20250529_101628_hires.mp4",
         opencv::videoio::CAP_ANY,
     )
     .unwrap();
         let mut frame = opencv::core::Mat::default();
 
         while cap.read(&mut frame).unwrap() {
-            frames.push(frame.clone());
+            opencv::imgcodecs::imwrite(
+                format!("{}/{}.png", PARSED_IMAGE_PATH, frame_index_name).as_str(),
+                &frame,
+                &opencv::core::Vector::new(),
+            )
+            .unwrap();
+            frame_index_name += 1;
+            println!("Обработано {}", frame_index_name);
         }
-        cap.set(CAP_PROP_POS_FRAMES, 0.0).unwrap();
     }
 
     let dictionary = opencv::objdetect::get_predefined_dictionary(
@@ -33,24 +40,35 @@ fn main() {
     )
     .unwrap();
     let charuco_board = opencv::objdetect::CharucoBoard::new_def(
-        opencv::core::Size::new(5, 5),
-        10.0,
-        7.0,
+        opencv::core::Size::new(10, 5),
+        28.333333333,
+        19.833,
         &dictionary,
     )
     .unwrap();
 
     let mut current_i = 0;
     loop {
-        let Some(current_frame) = frames.get(current_i) else {
-            eprintln!("Не получилось считать кадр");
-            continue;
+        let current_frame = match imgcodecs::imread(
+            &format!("{}/{}.png", PARSED_IMAGE_PATH, current_i),
+            imgcodecs::IMREAD_COLOR,
+        ) {
+            Ok(frame) => frame,
+            Err(_) => {
+                eprintln!("Не получилось считать кадр");
+                continue;
+            }
         };
 
-        let Ok((img_1, img_2, img_3, img_4)) = split_image_into_quadrants(&current_frame) else {
+        let Ok(quadrants) = split_image_into_quadrants(&current_frame) else {
             eprintln!("Не получилось разбить изображение");
             continue;
         };
+
+        let img_1 = quadrants[0].clone();
+        let img_2 = quadrants[1].clone();
+        let img_3 = quadrants[2].clone();
+        let img_4 = quadrants[3].clone();
 
         let Ok((
             _marker_corners_1,
@@ -155,25 +173,25 @@ fn main() {
             32 => {
                 let timestamp = current_i.to_string();
                 imgcodecs::imwrite(
-                    &format!("{}/img_1_{}.png", IMAGE_PATH, timestamp),
+                    &format!("{}/img_1_{}.png", PICKED_IMAGE_PATH, timestamp),
                     &img_1,
                     &opencv::core::Vector::new(),
                 )
                 .unwrap();
                 imgcodecs::imwrite(
-                    &format!("{}/img_2_{}.png", IMAGE_PATH, timestamp),
+                    &format!("{}/img_2_{}.png", PICKED_IMAGE_PATH, timestamp),
                     &img_2,
                     &Vector::new(),
                 )
                 .unwrap();
                 imgcodecs::imwrite(
-                    &format!("{}/img_3_{}.png", IMAGE_PATH, timestamp),
+                    &format!("{}/img_3_{}.png", PICKED_IMAGE_PATH, timestamp),
                     &img_3,
                     &Vector::new(),
                 )
                 .unwrap();
                 imgcodecs::imwrite(
-                    &format!("{}/img_4_{}.png", IMAGE_PATH, timestamp),
+                    &format!("{}/img_4_{}.png", PICKED_IMAGE_PATH, timestamp),
                     &img_4,
                     &Vector::new(),
                 )
@@ -184,5 +202,5 @@ fn main() {
             _ => {}
         }
     }
-    perform_calibration(IMAGE_PATH, &charuco_board, 4);
+    perform_calibration(PICKED_IMAGE_PATH, &charuco_board, 4);
 }

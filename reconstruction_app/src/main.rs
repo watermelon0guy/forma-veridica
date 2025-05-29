@@ -9,13 +9,13 @@ use std::time::Instant;
 fn main() {
     let total_start_time = Instant::now();
     println!("==== ЭТАП 0: Инициализация программы ====");
-    const _IMAGE_PATH: &str =
+    const IMAGE_PATH: &str =
         "/home/watermelon0guy/Изображения/Experiments/raspberry_pi_cardboard/calibration";
-    println!("Путь к изображениям: {}", _IMAGE_PATH);
+    println!("Путь к изображениям: {}", IMAGE_PATH);
 
     println!("==== ЭТАП 1: Загрузка параметров камеры ====");
     let start_time = Instant::now();
-    let camera_params = load_camera_parameters("/home/watermelon0guy/Изображения/Experiments/raspberry_pi_cardboard/calibration_params.yml")
+    let camera_params = load_camera_parameters("/home/watermelon0guy/Изображения/Experiments/raspberry_pi_cardboard/calibration/picked/calibration_params.yml")
         .expect("Не получилось загрузить параметры камеры");
     println!(
         "Загружено {} наборов параметров камер за {:?}",
@@ -26,7 +26,7 @@ fn main() {
     println!("==== ЭТАП 2: Открытие видеофайла ====");
     let start_time = Instant::now();
     let mut cap = VideoCapture::from_file(
-        "/home/watermelon0guy/Видео/Experiments/raspberry_pi_cardboard/20250427_093804_hires.mp4",
+        "/home/watermelon0guy/Видео/Experiments/raspberry_pi_cardboard/20250529_102950_hires.mp4",
         opencv::videoio::CAP_ANY,
     )
     .unwrap();
@@ -113,6 +113,82 @@ fn main() {
     }
     println!("Сопоставление завершено за {:?}", start_time.elapsed());
 
+    println!("==== ЭТАП 6.5: Минимально видимый набор ====");
+    let start_time = Instant::now();
+
+    // Создаем множество индексов ключевых точек из референсной камеры,
+    // которые имеют соответствие во всех других камерах
+    let mut common_points_indices = Vec::new();
+
+    // Для каждой ключевой точки из референсной камеры
+    for i in 0..keypoints_list[0].len() {
+        // Проверяем, есть ли соответствие этой точки во всех других камерах
+        let mut visible_in_all_cameras = true;
+
+        for camera_matches in &all_matches {
+            // Проверяем, существует ли соответствие для текущей точки в данной камере
+            let point_has_match = camera_matches
+                .iter()
+                .any(|m| m.get(0).unwrap().query_idx as usize == i);
+
+            if !point_has_match {
+                visible_in_all_cameras = false;
+                break;
+            }
+        }
+
+        if visible_in_all_cameras {
+            common_points_indices.push(i);
+        }
+    }
+
+    println!(
+        "Найдено {} точек, видимых во всех камерах",
+        common_points_indices.len()
+    );
+
+    // Фильтруем matches, оставляя только точки, видимые во всех камерах
+    let mut filtered_matches = Vec::new();
+    for camera_matches in &all_matches {
+        let mut filtered_camera_matches = Vector::new();
+
+        for idx in &common_points_indices {
+            // Находим соответствие для этой точки в текущей камере
+            for m in camera_matches {
+                if m.get(0).unwrap().query_idx as usize == *idx {
+                    filtered_camera_matches.push(m.clone());
+                    break;
+                }
+            }
+        }
+
+        filtered_matches.push(filtered_camera_matches);
+    }
+
+    // Заменяем старые matches на отфильтрованные
+    all_matches = filtered_matches;
+
+    println!("Фильтрация завершена за {:?}", start_time.elapsed());
+
+    let mut img_with_points = images[0].clone();
+    for &idx in &common_points_indices {
+        let kp = &keypoints_list[0].get(idx).unwrap();
+        let center = opencv::core::Point::new(kp.pt().x as i32, kp.pt().y as i32);
+        opencv::imgproc::circle(
+            &mut img_with_points,
+            center,
+            5,
+            opencv::core::Scalar::new(0.0, 0.0, 255.0, 0.0),
+            2,
+            opencv::imgproc::LINE_8,
+            0,
+        )
+        .unwrap();
+    }
+    highgui::named_window("Common Points - Camera 1", highgui::WINDOW_AUTOSIZE).unwrap();
+    highgui::imshow("Common Points - Camera 1", &img_with_points).unwrap();
+    highgui::wait_key(0).unwrap();
+
     println!("==== ЭТАП 7: Подготовка матриц точек для триангуляции ====");
     let start_time = Instant::now();
 
@@ -157,24 +233,96 @@ fn main() {
         start_time.elapsed()
     );
 
+    // НОВЫЙ КОД: Undistort points before triangulation
+    println!("==== ЭТАП 7.5: Исправление дисторсии точек ====");
+    let start_time = Instant::now();
+
+    println!("Исправление дисторсии для всех точек перед триангуляцией...");
+    let mut undistorted_points_2d = Vector::<Mat>::default();
+
+    for (i, points) in points_2d.iter().enumerate() {
+        println!("  -> Исправление дисторсии для камеры {}", i + 1);
+
+        // Преобразуем формат точек для функции undistortPoints
+        // undistortPoints ожидает Nx1 матрицу с 2 каналами (x,y)
+        let num_points = points.rows();
+        let mut points_for_undistort = Mat::zeros(num_points, 1, opencv::core::CV_64FC2)
+            .unwrap()
+            .to_mat()
+            .unwrap();
+
+        for j in 0..num_points {
+            let x = *points.at_2d::<f64>(j, 0).unwrap();
+            let y = *points.at_2d::<f64>(j, 1).unwrap();
+
+            // Установка значений в 2-канальную матрицу
+            let pt = points_for_undistort
+                .at_2d_mut::<opencv::core::Vec2d>(j, 0)
+                .unwrap();
+            pt[0] = x;
+            pt[1] = y;
+        }
+
+        // Создаем матрицу для результата
+        let mut undistorted_points = Mat::zeros(num_points, 1, opencv::core::CV_64FC2)
+            .unwrap()
+            .to_mat()
+            .unwrap();
+
+        // Исправление дисторсии
+        opencv::calib3d::undistort_points(
+            &points_for_undistort,
+            &mut undistorted_points,
+            &camera_params[i].intrinsic,
+            &camera_params[i].distortion,
+            &Mat::default(),             // Не используем R (матрицу ректификации)
+            &camera_params[i].intrinsic, // Используем исходную матрицу камеры как P
+        )
+        .unwrap();
+
+        // Преобразуем обратно в формат Nx2
+        let mut undistorted_nx2 = Mat::zeros(num_points, 2, opencv::core::CV_64F)
+            .unwrap()
+            .to_mat()
+            .unwrap();
+
+        for j in 0..num_points {
+            let pt = undistorted_points
+                .at_2d::<opencv::core::Vec2d>(j, 0)
+                .unwrap();
+
+            *undistorted_nx2.at_2d_mut::<f64>(j, 0).unwrap() = pt[0];
+            *undistorted_nx2.at_2d_mut::<f64>(j, 1).unwrap() = pt[1];
+        }
+
+        undistorted_points_2d.push(undistorted_nx2);
+    }
+
+    println!(
+        "Исправление дисторсии завершено за {:?}",
+        start_time.elapsed()
+    );
+
     println!("==== ЭТАП 8: Триангуляция точек ====");
     let start_time = Instant::now();
 
-    let points_3d =
-        match lib_cv::reconstruction::triangulate_points_multiple(&points_2d, &camera_params) {
-            Ok(points) => {
-                println!(
-                    "Триангуляция успешно выполнена. Получено {} 3D точек за {:?}",
-                    points.len(),
-                    start_time.elapsed()
-                );
-                points
-            }
-            Err(e) => {
-                eprintln!("Ошибка при триангуляции точек: {:?}", e);
-                return;
-            }
-        };
+    let points_3d = match lib_cv::reconstruction::triangulate_points_multiple(
+        &undistorted_points_2d,
+        &camera_params,
+    ) {
+        Ok(points) => {
+            println!(
+                "Триангуляция успешно выполнена. Получено {} 3D точек за {:?}",
+                points.len(),
+                start_time.elapsed()
+            );
+            points
+        }
+        Err(e) => {
+            eprintln!("Ошибка при триангуляции точек: {:?}", e);
+            return;
+        }
+    };
 
     println!("==== ЭТАП 9: Создание облака точек ====");
     let start_time = Instant::now();
@@ -190,8 +338,16 @@ fn main() {
     println!("Добавление цветовой информации...");
     let mut colored_count = 0;
     for (i, point) in cloud.points.iter_mut().enumerate() {
-        let x = *points_2d.get(0).unwrap().at_2d::<f64>(i as i32, 0).unwrap() as i32;
-        let y = *points_2d.get(0).unwrap().at_2d::<f64>(i as i32, 1).unwrap() as i32;
+        let x = *undistorted_points_2d
+            .get(0)
+            .unwrap()
+            .at_2d::<f64>(i as i32, 0)
+            .unwrap() as i32;
+        let y = *undistorted_points_2d
+            .get(0)
+            .unwrap()
+            .at_2d::<f64>(i as i32, 1)
+            .unwrap() as i32;
 
         // Проверяем, что координаты в пределах изображения
         if x >= 0 && y >= 0 && x < images[0].cols() && y < images[0].rows() {
