@@ -1,0 +1,8 @@
+[package]
+name = "generate_calibration_pattern"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+lib_cv = { path = "../lib_cv" }
+opencv = { workspace = true }

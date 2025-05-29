@@ -1,5 +1,5 @@
 [workspace]
-members = ["calibration_app", "lib_cv", "reconstruction_app"]
+members = ["calibration_app", "generate_calibration_pattern", "lib_cv", "reconstruction_app"]
 resolver = "2"
 
 [workspace.dependencies]
