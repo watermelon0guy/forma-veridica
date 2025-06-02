@@ -1,5 +1,6 @@
 use lib_cv::calibration::{get_charuco, perform_calibration};
 use lib_cv::utils::{combine_quadrants, split_image_into_quadrants};
+use log::{debug, info};
 use opencv::core::{Scalar, Vector};
 use opencv::imgcodecs;
 use opencv::objdetect::draw_detected_corners_charuco;
@@ -7,6 +8,8 @@ use opencv::videoio::VideoCapture;
 use opencv::{highgui, prelude::*};
 
 fn main() {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+
     const PICKED_IMAGE_PATH: &str =
         "/home/watermelon0guy/Изображения/Experiments/raspberry_pi_cardboard/calibration/picked";
     const PARSED_IMAGE_PATH: &str =
@@ -17,7 +20,7 @@ fn main() {
 
     {
         let mut cap = VideoCapture::from_file(
-        "/home/watermelon0guy/Видео/Experiments/raspberry_pi_cardboard/20250529_101628_hires.mp4",
+        "/home/watermelon0guy/Видео/Experiments/raspberry_pi_cardboard/20250427_095907_hires.mp4",
         opencv::videoio::CAP_ANY,
     )
     .unwrap();
@@ -31,7 +34,7 @@ fn main() {
             )
             .unwrap();
             frame_index_name += 1;
-            println!("Обработано {}", frame_index_name);
+            debug!("Обработано {}", frame_index_name);
         }
     }
 
@@ -39,10 +42,17 @@ fn main() {
         opencv::objdetect::PredefinedDictionaryType::DICT_4X4_50,
     )
     .unwrap();
+    // let charuco_board = opencv::objdetect::CharucoBoard::new_def(
+    //     opencv::core::Size::new(10, 5),
+    //     28.333333333,
+    //     19.833,
+    //     &dictionary,
+    // )
+    // .unwrap();
     let charuco_board = opencv::objdetect::CharucoBoard::new_def(
-        opencv::core::Size::new(10, 5),
-        28.333333333,
-        19.833,
+        opencv::core::Size::new(5, 5),
+        20.0,
+        14.0,
         &dictionary,
     )
     .unwrap();
@@ -196,7 +206,7 @@ fn main() {
                     &Vector::new(),
                 )
                 .unwrap();
-                println!("Изображения сохранены с timestamp: {}", timestamp);
+                info!("Изображения сохранены с timestamp: {}", timestamp);
             }
             27 => break, // Escape key
             _ => {}

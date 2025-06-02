@@ -1,7 +1,4 @@
-use opencv::{
-    core::{Mat, Size2d},
-    prelude::BoardTraitConst,
-};
+use opencv::{core::Mat, prelude::BoardTraitConst};
 
 fn main() {
     let dictionary = opencv::objdetect::get_predefined_dictionary(

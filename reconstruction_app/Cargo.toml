@@ -6,3 +6,5 @@ edition = "2024"
 [dependencies]
 lib_cv = { path = "../lib_cv" }
 opencv = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }

@@ -5,3 +5,5 @@ edition = "2024"
 
 [dependencies]
 opencv = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }

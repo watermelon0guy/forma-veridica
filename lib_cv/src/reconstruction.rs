@@ -1,3 +1,4 @@
+use log::{debug, error, info, warn};
 use opencv::{
     Error,
     core::{Mat, Point3d, StsError, Vector, gemm},
@@ -59,12 +60,8 @@ pub fn triangulate_points_multiple(
     points_2d: &Vector<Mat>,
     camera_params: &[CameraParameters],
 ) -> Result<Vec<Point3D>, Error> {
-    println!("\n=== НАЧАЛО ФУНКЦИИ triangulate_points_multiple ===");
-    println!("Количество наборов точек: {}", points_2d.len());
-    println!("Количество камер: {}", camera_params.len());
-
     if points_2d.len() < 2 || camera_params.len() < 2 {
-        println!("ОШИБКА: Недостаточно камер или наборов точек");
+        error!("Недостаточно камер или наборов точек");
         return Err(Error::new(
             StsError as i32,
             "Требуется минимум 2 камеры для триангуляции".to_string(),
@@ -72,7 +69,7 @@ pub fn triangulate_points_multiple(
     }
 
     if points_2d.len() != camera_params.len() {
-        println!("ОШИБКА: Количество наборов точек не соответствует количеству камер");
+        error!("Количество наборов точек не соответствует количеству камер");
         return Err(Error::new(
             StsError as i32,
             "Количество списков точек должно совпадать с количеством камер".to_string(),
@@ -81,12 +78,12 @@ pub fn triangulate_points_multiple(
 
     // Количество точек (предполагаем, что все матрицы имеют одинаковое количество строк)
     let num_points = points_2d.get(0)?.rows();
-    println!("Количество точек для триангуляции: {}", num_points);
+    debug!("Количество точек для триангуляции: {}", num_points);
 
     // Проверка, что все матрицы имеют правильный размер
     for (i, points) in points_2d.iter().enumerate() {
         if points.rows() != num_points || points.cols() != 2 {
-            println!("ОШИБКА: Неверный размер матрицы точек для камеры {}", i);
+            error!("Неверный размер матрицы точек для камеры {}", i);
             return Err(Error::new(
                 StsError as i32,
                 format!(
@@ -98,26 +95,12 @@ pub fn triangulate_points_multiple(
                 ),
             ));
         }
-        println!(
-            "Камера {}: {} точек, размер {}x{}",
-            i,
-            points.rows(),
-            points.rows(),
-            points.cols()
-        );
     }
 
     // Подготовка матриц проекций для всех камер
     let mut projection_matrices = Vector::<Mat>::default();
-    println!("\n=== АНАЛИЗ ПАРАМЕТРОВ КАМЕР И ПОСТРОЕНИЕ МАТРИЦ ПРОЕКЦИИ ===");
 
     for (i, cam) in camera_params.iter().enumerate() {
-        println!("\nПараметры камеры #{}:", i);
-        println!("Внутренняя матрица (intrinsic):\n{:?}", cam.intrinsic);
-        println!("Дисторсия:\n{:?}", cam.distortion);
-        println!("Матрица вращения (rotation):\n{:?}", cam.rotation);
-        println!("Вектор трансляции (translation):\n{:?}", cam.translation);
-
         // Проверка первой камеры
         if i == 0 {
             // Проверяем, является ли матрица вращения единичной
@@ -146,23 +129,15 @@ pub fn triangulate_points_multiple(
                 }
             }
 
-            println!("Проверка первой камеры:");
-            println!("  Матрица вращения является единичной: {}", is_identity);
-            println!(
-                "  Вектор трансляции является нулевым: {}",
-                is_zero_translation
-            );
-
             if !is_identity || !is_zero_translation {
-                println!(
-                    "  ВНИМАНИЕ: Для первой камеры ожидается единичная матрица вращения и нулевой вектор трансляции!"
+                warn!(
+                    "Вектор трансляции не нулевой или матрица вращения не единичная для главной камеры"
                 );
             }
         }
 
         let mut r_t = Mat::default();
         opencv::core::hconcat2(&cam.rotation, &cam.translation, &mut r_t)?;
-        println!("Объединенная матрица [R|t] для камеры #{}:\n{:?}", i, r_t);
 
         let mut projection_matrix = Mat::default();
         opencv::sfm::projection_from_k_rt(
@@ -172,20 +147,6 @@ pub fn triangulate_points_multiple(
             &mut projection_matrix,
         )
         .unwrap();
-        // gemm(
-        //     &cam.intrinsic,
-        //     &r_t,
-        //     1.0,
-        //     &Mat::default(),
-        //     0.0,
-        //     &mut projection_matrix,
-        //     0,
-        // )?;
-        println!(
-            "Матрица проекции для камеры #{}:\n{:?}",
-            i, projection_matrix
-        );
-
         projection_matrices.push(projection_matrix);
     }
 
@@ -199,61 +160,22 @@ pub fn triangulate_points_multiple(
         })
         .collect::<Result<Vector<Mat>, Error>>()?;
 
-    // Триангуляция точек
-    println!("\n=== ТРИАНГУЛЯЦИЯ ТОЧЕК ===");
     let mut points_3d = Mat::default();
 
-    println!(
-        "Размер вектора с converted_points: {}",
-        converted_points.len()
-    );
-    for (i, pts) in converted_points.iter().enumerate() {
-        println!(
-            "converted_points[{}] размер: {}x{}, тип: {:?}",
-            i,
-            pts.rows(),
-            pts.cols(),
-            pts.typ()
-        );
-    }
-
-    println!(
-        "Размер вектора с projection_matrices: {}",
-        projection_matrices.len()
-    );
-    for (i, proj) in projection_matrices.iter().enumerate() {
-        println!(
-            "projection_matrices[{}] размер: {}x{}, тип: {:?}",
-            i,
-            proj.rows(),
-            proj.cols(),
-            proj.typ()
-        );
-    }
-
-    println!("Вызов функции triangulate_points...");
     match triangulate_points(&converted_points, &projection_matrices, &mut points_3d) {
         Ok(_) => {
-            println!(
-                "Триангуляция успешно выполнена. Получена матрица размером {}x{}, тип: {:?}",
-                points_3d.rows(),
-                points_3d.cols(),
-                points_3d.typ()
+            debug!(
+                "Триангуляция успешно выполнена. Количество точек: {}",
+                points_3d.cols()
             );
         }
         Err(e) => {
-            println!("ОШИБКА при триангуляции: {:?}", e);
+            error!("Ошибка при триангуляции: {:?}", e);
             return Err(e);
         }
     }
 
-    // Преобразование результата в вектор Point3D
-    println!("\n=== АНАЛИЗ РЕЗУЛЬТАТОВ ТРИАНГУЛЯЦИИ ===");
     let mut result = Vec::with_capacity(num_points as usize);
-
-    // Выведем несколько примеров точек
-    let sample_size = num_points.min(5) as usize;
-    println!("Пример первых {} триангулированных точек:", sample_size);
 
     let mut total_errors = Vec::new();
     let mut num_bad_points = 0;
@@ -314,15 +236,6 @@ pub fn triangulate_points_multiple(
             num_bad_points += 1;
         }
 
-        // Выводим примеры первых нескольких точек
-        if i < sample_size as i32 {
-            println!(
-                "Точка #{}: ({:.2}, {:.2}, {:.2}), средняя ошибка: {:.2} пикс., уверенность: {:.2}",
-                i, x, y, z, avg_error, confidence
-            );
-            println!("  Ошибки по камерам: {:?}", errors_by_camera);
-        }
-
         result.push(Point3D::new(x, y, z, confidence));
     }
 
@@ -334,20 +247,17 @@ pub fn triangulate_points_multiple(
         let median_error = total_errors[total_errors.len() / 2];
         let mean_error = total_errors.iter().sum::<f64>() / total_errors.len() as f64;
 
-        println!("\nСтатистика ошибок репроекции:");
-        println!("  Минимальная ошибка: {:.2} пикс.", min_error);
-        println!("  Медианная ошибка:  {:.2} пикс.", median_error);
-        println!("  Средняя ошибка:    {:.2} пикс.", mean_error);
-        println!("  Максимальная ошибка: {:.2} пикс.", max_error);
-        println!(
-            "  Количество точек с ошибкой > 5 пикс.: {} из {} ({:.1}%)",
+        info!("Минимальная ошибка: {:.2} пикс.", min_error);
+        info!("Медианная ошибка:  {:.2} пикс.", median_error);
+        info!("Средняя ошибка:    {:.2} пикс.", mean_error);
+        info!("Максимальная ошибка: {:.2} пикс.", max_error);
+        info!(
+            "Количество точек с ошибкой > 5 пикс.: {} из {} ({:.1}%)",
             num_bad_points,
             num_points,
             100.0 * num_bad_points as f64 / num_points as f64
         );
     }
-
-    println!("\n=== КОНЕЦ ФУНКЦИИ triangulate_points_multiple ===");
     Ok(result)
 }
 

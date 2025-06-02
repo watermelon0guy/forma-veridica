@@ -13,13 +13,8 @@ pub fn sift(image_1: &Mat) -> Result<(Vector<KeyPoint>, Mat), Error> {
     let mut descriptors_1 = Mat::default();
 
     let mask = Mat::default();
-    let stopwatch = Instant::now();
     sift.detect_and_compute_def(&image_1, &mask, &mut keypoints_1, &mut descriptors_1)
         .unwrap();
-    println!(
-        "Нахождение признаков методом SIFT заняло {:?}",
-        stopwatch.elapsed()
-    );
     Ok((keypoints_1, descriptors_1))
 }
 
@@ -55,7 +50,6 @@ pub fn bf_match_knn(
         neighbours_amount,
     )?;
 
-    let stopwatch = Instant::now();
     let filtered_matches: Vector<Vector<DMatch>> = matched_descriptors
         .into_iter()
         .filter(|n| {
@@ -69,10 +63,6 @@ pub fn bf_match_knn(
                             .distance
         })
         .collect();
-    println!(
-        "Сопоставление признаков методом Brute Force заняло {:?}",
-        stopwatch.elapsed()
-    );
 
     Ok(filtered_matches)
 }

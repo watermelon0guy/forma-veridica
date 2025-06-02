@@ -1,6 +1,7 @@
 use lib_cv::calibration::load_camera_parameters;
 use lib_cv::reconstruction::{PointCloud, save_point_cloud};
 use lib_cv::utils::split_image_into_quadrants;
+use log::{debug, error, info};
 use opencv::core::Vector;
 use opencv::videoio::VideoCapture;
 use opencv::{highgui, prelude::*};
@@ -8,12 +9,9 @@ use std::time::Instant;
 
 fn main() {
     let total_start_time = Instant::now();
-    println!("==== ЭТАП 0: Инициализация программы ====");
     const IMAGE_PATH: &str =
         "/home/watermelon0guy/Изображения/Experiments/raspberry_pi_cardboard/calibration";
-    println!("Путь к изображениям: {}", IMAGE_PATH);
-
-    println!("==== ЭТАП 1: Загрузка параметров камеры ====");
+    debug!("Путь к изображениям: {}", IMAGE_PATH);
     let start_time = Instant::now();
     let camera_params = load_camera_parameters("/home/watermelon0guy/Изображения/Experiments/raspberry_pi_cardboard/calibration/picked/calibration_params.yml")
         .expect("Не получилось загрузить параметры камеры");
@@ -23,20 +21,16 @@ fn main() {
         start_time.elapsed()
     );
 
-    println!("==== ЭТАП 2: Открытие видеофайла ====");
-    let start_time = Instant::now();
     let mut cap = VideoCapture::from_file(
-        "/home/watermelon0guy/Видео/Experiments/raspberry_pi_cardboard/20250529_102950_hires.mp4",
+        "/home/watermelon0guy/Видео/Experiments/raspberry_pi_cardboard/20250427_094302_hires.mp4",
         opencv::videoio::CAP_ANY,
     )
     .unwrap();
-    println!("Видеофайл успешно открыт за {:?}", start_time.elapsed());
 
-    println!("==== ЭТАП 3: Чтение кадра ====");
     let start_time = Instant::now();
     let mut frame = opencv::core::Mat::default();
     cap.read(&mut frame).unwrap();
-    println!(
+    debug!(
         "Кадр считан. Размер: {}x{} за {:?}",
         frame.cols(),
         frame.rows(),
@@ -45,11 +39,10 @@ fn main() {
 
     let mut current_i = 0;
 
-    println!("==== ЭТАП 4: Разделение изображения на камеры ====");
     let start_time = Instant::now();
     let images = match split_image_into_quadrants(&frame) {
         Ok(it) => {
-            println!(
+            debug!(
                 "Изображение успешно разделено на {} части за {:?}",
                 it.len(),
                 start_time.elapsed()
@@ -57,43 +50,39 @@ fn main() {
             it
         }
         Err(e) => {
-            eprintln!("Ошибка при разделении изображения: {:?}", e);
+            error!("Ошибка при разделении изображения: {:?}", e);
             return;
         }
     };
 
-    println!("==== ЭТАП 5: Извлечение ключевых точек (SIFT) ====");
     let start_time = Instant::now();
     let mut keypoints_list = Vec::new();
     let mut descriptors_list = Vec::new();
 
     for (i, image) in images.iter().enumerate() {
-        println!("Обработка изображения {} из {}", i + 1, images.len());
+        info!("Обработка изображения {} из {}", i + 1, images.len());
         let (keypoints, descriptors) = match lib_cv::correspondence::sift(&image) {
             Ok(it) => {
-                println!("  -> Найдено {} ключевых точек", it.0.len());
+                info!("  -> Найдено {} ключевых точек", it.0.len());
                 it
             }
             Err(e) => {
-                eprintln!("  -> Ошибка при выполнении SIFT: {:?}", e);
+                error!("  -> Ошибка при выполнении SIFT: {:?}", e);
                 continue;
             }
         };
         keypoints_list.push(keypoints);
         descriptors_list.push(descriptors);
     }
-    println!("Обработка SIFT завершена за {:?}", start_time.elapsed());
+    info!("Обработка SIFT завершена за {:?}", start_time.elapsed());
 
-    println!("==== ЭТАП 6: Сопоставление ключевых точек ====");
     let start_time = Instant::now();
-
     let mut all_matches = Vec::new();
     // Первая камера - референсная
     let ref_descriptor = &descriptors_list[0];
 
-    println!("Сопоставление ключевых точек между камерами:");
     for i in 1..descriptors_list.len() {
-        println!("  -> Сопоставление камеры 1 с камерой {}", i + 1);
+        info!("Сопоставление камеры 1 с камерой {}", i + 1);
         let matches = match lib_cv::correspondence::bf_match_knn(
             &ref_descriptor,
             &descriptors_list[i],
@@ -101,19 +90,18 @@ fn main() {
             0.7, // ratio = 0.7
         ) {
             Ok(it) => {
-                println!("    -> Найдено {} сопоставлений", it.len());
+                info!("Найдено {} сопоставлений", it.len());
                 it
             }
             Err(e) => {
-                eprintln!("    -> Ошибка при выполнении сопоставления BF KNN: {:?}", e);
+                error!("Ошибка при выполнении сопоставления BF KNN: {:?}", e);
                 continue;
             }
         };
         all_matches.push(matches);
     }
-    println!("Сопоставление завершено за {:?}", start_time.elapsed());
+    info!("Сопоставление завершено за {:?}", start_time.elapsed());
 
-    println!("==== ЭТАП 6.5: Минимально видимый набор ====");
     let start_time = Instant::now();
 
     // Создаем множество индексов ключевых точек из референсной камеры,
@@ -142,7 +130,7 @@ fn main() {
         }
     }
 
-    println!(
+    info!(
         "Найдено {} точек, видимых во всех камерах",
         common_points_indices.len()
     );
@@ -168,7 +156,7 @@ fn main() {
     // Заменяем старые matches на отфильтрованные
     all_matches = filtered_matches;
 
-    println!("Фильтрация завершена за {:?}", start_time.elapsed());
+    info!("Фильтрация завершена за {:?}", start_time.elapsed());
 
     let mut img_with_points = images[0].clone();
     for &idx in &common_points_indices {
@@ -185,11 +173,10 @@ fn main() {
         )
         .unwrap();
     }
-    highgui::named_window("Common Points - Camera 1", highgui::WINDOW_AUTOSIZE).unwrap();
+    highgui::named_window("Common Points - Camera 1", highgui::WINDOW_NORMAL).unwrap();
     highgui::imshow("Common Points - Camera 1", &img_with_points).unwrap();
     highgui::wait_key(0).unwrap();
 
-    println!("==== ЭТАП 7: Подготовка матриц точек для триангуляции ====");
     let start_time = Instant::now();
 
     // Создаем матрицы с 2D точками для всех камер
@@ -197,13 +184,12 @@ fn main() {
 
     // Для первой (референсной) камеры
     let num_matches = all_matches[0].len();
-    println!("Общее количество сопоставленных точек: {}", num_matches);
+    info!("Общее количество сопоставленных точек: {}", num_matches);
     let mut points_cam1 = Mat::zeros(num_matches as i32, 2, opencv::core::CV_64F)
         .unwrap()
         .to_mat()
         .unwrap();
 
-    println!("Заполнение точек для первой (референсной) камеры...");
     for (j, matches) in all_matches[0].iter().enumerate() {
         let match_ref = matches.get(0).unwrap();
         let kp = keypoints_list[0].get(match_ref.query_idx as usize).unwrap();
@@ -212,9 +198,7 @@ fn main() {
     }
     points_2d.push(points_cam1);
 
-    println!("Заполнение точек для остальных камер...");
     for i in 1..camera_params.len() {
-        println!("  -> Заполнение точек для камеры {}", i + 1);
         let mut points_cam = Mat::zeros(num_matches as i32, 2, opencv::core::CV_64F)
             .unwrap()
             .to_mat()
@@ -228,21 +212,16 @@ fn main() {
         }
         points_2d.push(points_cam);
     }
-    println!(
+    info!(
         "Подготовка матриц точек завершена за {:?}",
         start_time.elapsed()
     );
 
-    // НОВЫЙ КОД: Undistort points before triangulation
-    println!("==== ЭТАП 7.5: Исправление дисторсии точек ====");
     let start_time = Instant::now();
 
-    println!("Исправление дисторсии для всех точек перед триангуляцией...");
     let mut undistorted_points_2d = Vector::<Mat>::default();
 
     for (i, points) in points_2d.iter().enumerate() {
-        println!("  -> Исправление дисторсии для камеры {}", i + 1);
-
         // Преобразуем формат точек для функции undistortPoints
         // undistortPoints ожидает Nx1 матрицу с 2 каналами (x,y)
         let num_points = points.rows();
@@ -298,12 +277,11 @@ fn main() {
         undistorted_points_2d.push(undistorted_nx2);
     }
 
-    println!(
+    info!(
         "Исправление дисторсии завершено за {:?}",
         start_time.elapsed()
     );
 
-    println!("==== ЭТАП 8: Триангуляция точек ====");
     let start_time = Instant::now();
 
     let points_3d = match lib_cv::reconstruction::triangulate_points_multiple(
@@ -311,7 +289,7 @@ fn main() {
         &camera_params,
     ) {
         Ok(points) => {
-            println!(
+            info!(
                 "Триангуляция успешно выполнена. Получено {} 3D точек за {:?}",
                 points.len(),
                 start_time.elapsed()
@@ -319,23 +297,20 @@ fn main() {
             points
         }
         Err(e) => {
-            eprintln!("Ошибка при триангуляции точек: {:?}", e);
+            error!("Ошибка при триангуляции точек: {:?}", e);
             return;
         }
     };
 
-    println!("==== ЭТАП 9: Создание облака точек ====");
     let start_time = Instant::now();
 
     // Получаем цвета точек из первого изображения (референсной камеры)
-    println!("Создание структуры облака точек...");
     let mut cloud = PointCloud {
         points: points_3d,
         timestamp: current_i as usize,
     };
 
     // Добавляем цвет из исходного изображения
-    println!("Добавление цветовой информации...");
     let mut colored_count = 0;
     for (i, point) in cloud.points.iter_mut().enumerate() {
         let x = *undistorted_points_2d
@@ -356,41 +331,26 @@ fn main() {
             colored_count += 1;
         }
     }
-    println!(
-        "Добавлена цветовая информация для {} из {} точек",
-        colored_count,
-        cloud.points.len()
-    );
 
     // Фильтрация по уверенности
-    println!("Фильтрация точек по уверенности...");
     let initial_count = cloud.points.len();
     let confidence_threshold = 0.0;
     cloud
         .points
         .retain(|point| point.confidence >= confidence_threshold);
-    println!(
+    info!(
         "Отфильтровано {} точек (оставлено {})",
         initial_count - cloud.points.len(),
         cloud.points.len()
     );
-    println!(
+    info!(
         "Обработка облака точек завершена за {:?}",
         start_time.elapsed()
     );
 
-    println!("==== ЭТАП 10: Отображение результатов и сохранение ====");
-    let start_time = Instant::now();
-
-    println!("Сохранение облака точек в PLY файл...");
     let filename = format!("point_cloud_{}.ply", current_i);
     match save_point_cloud(&cloud, &filename) {
-        Ok(_) => println!("Облако точек успешно сохранено в файл: {}", filename),
-        Err(e) => eprintln!("Ошибка при сохранении облака точек: {:?}", e),
+        Ok(_) => info!("Облако точек успешно сохранено в файл: {}", filename),
+        Err(e) => error!("Ошибка при сохранении облака точек: {:?}", e),
     };
-
-    println!("Ожидание нажатия клавиши...");
-
-    println!("Общее время выполнения: {:?}", total_start_time.elapsed());
-    println!("==== Программа завершена ====");
 }
