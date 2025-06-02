@@ -1,7 +1,11 @@
+use std::path::Path;
+
+use log::{debug, info};
 use opencv::{
     Error,
     core::{Vector, hconcat, vconcat},
     prelude::*,
+    videoio::VideoCapture,
 };
 
 pub fn split_image_into_quadrants(img: &Mat) -> Result<Vec<Mat>, Error> {
@@ -65,4 +69,29 @@ pub fn combine_quadrants(
     vconcat(&all, &mut combined)?;
 
     Ok(combined)
+}
+
+pub fn video_to_frames(path_to_video: &Path, parsed_image_folder_path: &Path) -> Result<(), Error> {
+    let mut cap = VideoCapture::from_file(
+        path_to_video
+            .to_str()
+            .ok_or_else(|| Error::new(-1, "Неправильный путь к видео"))?,
+        opencv::videoio::CAP_ANY,
+    )?;
+    let mut frame = opencv::core::Mat::default();
+    let mut frame_index = 0;
+
+    while cap.read(&mut frame)? {
+        let filename = format!(
+            "{}/{}.png",
+            parsed_image_folder_path
+                .to_str()
+                .ok_or_else(|| Error::new(-1, "Неправильный путь к папке для изображений"))?,
+            frame_index
+        );
+        opencv::imgcodecs::imwrite(&filename, &frame, &opencv::core::Vector::new())?;
+        frame_index += 1;
+        debug!("Обработано {}", frame_index);
+    }
+    Ok(())
 }

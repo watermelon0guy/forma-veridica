@@ -1,5 +1,7 @@
+use std::path::Path;
+
 use lib_cv::calibration::{get_charuco, perform_calibration};
-use lib_cv::utils::{combine_quadrants, split_image_into_quadrants};
+use lib_cv::utils::{combine_quadrants, split_image_into_quadrants, video_to_frames};
 use log::{debug, info};
 use opencv::core::{Scalar, Vector};
 use opencv::imgcodecs;
@@ -14,48 +16,30 @@ fn main() {
         "/home/watermelon0guy/Изображения/Experiments/raspberry_pi_cardboard/calibration/picked";
     const PARSED_IMAGE_PATH: &str =
         "/home/watermelon0guy/Изображения/Experiments/raspberry_pi_cardboard/calibration/parsed";
+    const VIDEO_PATH: &str =
+        "/home/watermelon0guy/Видео/Experiments/raspberry_pi_cardboard/20250602_101717_hires.mp4";
     highgui::named_window("Charuco Доска", highgui::WINDOW_KEEPRATIO).unwrap();
 
-    let mut frame_index_name = 0;
-
-    {
-        let mut cap = VideoCapture::from_file(
-        "/home/watermelon0guy/Видео/Experiments/raspberry_pi_cardboard/20250427_095907_hires.mp4",
-        opencv::videoio::CAP_ANY,
-    )
-    .unwrap();
-        let mut frame = opencv::core::Mat::default();
-
-        while cap.read(&mut frame).unwrap() {
-            opencv::imgcodecs::imwrite(
-                format!("{}/{}.png", PARSED_IMAGE_PATH, frame_index_name).as_str(),
-                &frame,
-                &opencv::core::Vector::new(),
-            )
-            .unwrap();
-            frame_index_name += 1;
-            debug!("Обработано {}", frame_index_name);
-        }
-    }
+    video_to_frames(Path::new(VIDEO_PATH), Path::new(PARSED_IMAGE_PATH)).unwrap();
 
     let dictionary = opencv::objdetect::get_predefined_dictionary(
         opencv::objdetect::PredefinedDictionaryType::DICT_4X4_50,
     )
     .unwrap();
-    // let charuco_board = opencv::objdetect::CharucoBoard::new_def(
-    //     opencv::core::Size::new(10, 5),
-    //     28.333333333,
-    //     19.833,
-    //     &dictionary,
-    // )
-    // .unwrap();
     let charuco_board = opencv::objdetect::CharucoBoard::new_def(
-        opencv::core::Size::new(5, 5),
-        20.0,
-        14.0,
+        opencv::core::Size::new(10, 5),
+        28.333333333,
+        19.833,
         &dictionary,
     )
     .unwrap();
+    // let charuco_board = opencv::objdetect::CharucoBoard::new_def(
+    //     opencv::core::Size::new(5, 5),
+    //     20.0,
+    //     14.0,
+    //     &dictionary,
+    // )
+    // .unwrap();
 
     let mut current_i = 0;
     loop {
