@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::fs;
+use std::path::Path;
 
 use log::{debug, error, info};
 use opencv::calib3d::{calibrate_camera, stereo_calibrate};
@@ -494,7 +495,12 @@ pub fn find_common_points(frames: &[Vector<i32>]) -> HashSet<i32> {
     common_ids
 }
 
-pub fn perform_calibration(image_path: &str, charuco_board: &CharucoBoard, num_cameras: usize) {
+pub fn perform_calibration(
+    image_path: &str,
+    cameras_params_path: &Path,
+    charuco_board: &CharucoBoard,
+    num_cameras: usize,
+) {
     debug!("Поиск калибровочных изображений в: {}", image_path);
 
     // Собираем все файлы в директории
@@ -558,9 +564,13 @@ pub fn perform_calibration(image_path: &str, charuco_board: &CharucoBoard, num_c
             }
 
             // Сохранение параметров в файл (опционально)
-            if let Err(e) =
-                save_camera_parameters(&cameras, &format!("{}/calibration_params.yml", image_path))
-            {
+            if let Err(e) = save_camera_parameters(
+                &cameras,
+                &format!(
+                    "{}/calibration_params.yml",
+                    cameras_params_path.to_str().unwrap()
+                ),
+            ) {
                 error!("Ошибка при сохранении параметров: {}", e);
             }
         }

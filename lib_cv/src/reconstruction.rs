@@ -1,7 +1,7 @@
 use log::{debug, error, info, warn};
 use opencv::{
     Error,
-    core::{Mat, Point3d, StsError, Vector, gemm},
+    core::{DMatch, KeyPoint, Mat, Point3d, StsError, Vector, gemm},
     prelude::*,
     sfm::triangulate_points,
 };
@@ -9,7 +9,10 @@ use std::fs::File;
 use std::io::{self, Write};
 use std::path::Path;
 
-use crate::calibration::CameraParameters;
+use crate::{
+    calibration::CameraParameters,
+    correspondence::{bf_match_knn, sift},
+};
 
 #[derive(Debug, Clone)]
 pub struct Point3D {
@@ -310,4 +313,141 @@ pub fn save_point_cloud<P: AsRef<Path>>(cloud: &PointCloud, path: P) -> io::Resu
     }
 
     Ok(())
+}
+
+pub fn match_first_camera_features_to_all(
+    images: &Vec<Mat>,
+) -> (Vec<Vector<Vector<DMatch>>>, Vec<Vector<KeyPoint>>, Vec<Mat>) {
+    let mut keypoints_list = Vec::new();
+    let mut descriptors_list = Vec::new();
+
+    for (i, image) in images.iter().enumerate() {
+        info!("Обработка изображения {} из {}", i + 1, images.len());
+        let (keypoints, descriptors) = match sift(&image, 0, 4, 0.04, 10f64, 1.6, false) {
+            Ok(it) => {
+                info!("  -> Найдено {} ключевых точек", it.0.len());
+                it
+            }
+            Err(e) => {
+                error!("  -> Ошибка при выполнении SIFT: {:?}", e);
+                continue;
+            }
+        };
+        keypoints_list.push(keypoints);
+        descriptors_list.push(descriptors);
+    }
+
+    let mut all_matches = Vec::new();
+    // Первая камера - референсная
+    let ref_descriptor = &descriptors_list[0];
+
+    for i in 1..descriptors_list.len() {
+        info!("Сопоставление камеры 1 с камерой {}", i + 1);
+        let matches = match bf_match_knn(
+            &ref_descriptor,
+            &descriptors_list[i],
+            2,   // k = 2 соседа
+            0.7, // ratio = 0.7
+        ) {
+            Ok(it) => {
+                info!("Найдено {} сопоставлений", it.len());
+                it
+            }
+            Err(e) => {
+                error!("Ошибка при выполнении сопоставления BF KNN: {:?}", e);
+                continue;
+            }
+        };
+        all_matches.push(matches);
+    }
+    (all_matches, keypoints_list, descriptors_list)
+    // TODO добавить вывод ошибки при отсутсвии сопоставлений
+}
+
+pub fn min_visible_match_set(
+    all_matches: &Vec<Vector<Vector<DMatch>>>,
+    keypoints_list: &Vec<Vector<KeyPoint>>,
+) -> Vec<Vector<Vector<DMatch>>> {
+    // Создаем множество индексов ключевых точек из референсной камеры,
+    // которые имеют соответствие во всех других камерах
+    let mut common_points_indices = Vec::new();
+
+    // Для каждой ключевой точки из референсной камеры
+    for i in 0..keypoints_list[0].len() {
+        // Проверяем, есть ли соответствие этой точки во всех других камерах
+        let mut visible_in_all_cameras = true;
+
+        for camera_matches in all_matches {
+            // Проверяем, существует ли соответствие для текущей точки в данной камере
+            let point_has_match = camera_matches
+                .iter()
+                .any(|m| m.get(0).unwrap().query_idx as usize == i);
+
+            if !point_has_match {
+                visible_in_all_cameras = false;
+                break;
+            }
+        }
+
+        if visible_in_all_cameras {
+            common_points_indices.push(i);
+        }
+    }
+
+    info!(
+        "Найдено {} точек, видимых во всех камерах",
+        common_points_indices.len()
+    );
+
+    // Фильтруем matches, оставляя только точки, видимые во всех камерах
+    let mut filtered_matches = Vec::new();
+    for camera_matches in all_matches {
+        let mut filtered_camera_matches = Vector::<Vector<DMatch>>::new();
+
+        for idx in &common_points_indices {
+            // Находим соответствие для этой точки в текущей камере
+            for m in camera_matches {
+                if m.get(0).unwrap().query_idx as usize == *idx {
+                    filtered_camera_matches.push(m.clone());
+                    break;
+                }
+            }
+        }
+
+        filtered_matches.push(filtered_camera_matches);
+    }
+
+    filtered_matches
+}
+
+pub fn filter_point_cloud_by_confindence(cloud: &mut PointCloud, confidence_threshold: f32) {
+    cloud
+        .points
+        .retain(|point| point.confidence >= confidence_threshold);
+}
+
+pub fn add_color_to_point_cloud(
+    cloud: &mut PointCloud,
+    distorted_points: &Vector<Mat>,
+    ref_image: &Mat,
+) {
+    // Добавляем цвет из исходного изображения
+    for (i, point) in cloud.points.iter_mut().enumerate() {
+        let x = *distorted_points
+            .get(0)
+            .unwrap()
+            .at_2d::<f64>(i as i32, 0)
+            .unwrap() as i32;
+        let y = *distorted_points
+            .get(0)
+            .unwrap()
+            .at_2d::<f64>(i as i32, 1)
+            .unwrap() as i32;
+
+        // Проверяем, что координаты в пределах изображения
+        if x >= 0 && y >= 0 && x < ref_image.cols() && y < ref_image.rows() {
+            let color = ref_image.at_2d::<opencv::core::Vec3b>(y, x).unwrap();
+            point.color = Some((color[2], color[1], color[0])); // BGR -> RGB
+        }
+    }
 }

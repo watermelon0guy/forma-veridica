@@ -1,12 +1,26 @@
-use std::time::Instant;
-
 use opencv::core::{DMatch, KeyPoint, NORM_L2, Vector};
 use opencv::features2d::{BFMatcher, SIFT};
 use opencv::prelude::*;
 use opencv::{self, Error};
 
-pub fn sift(image_1: &Mat) -> Result<(Vector<KeyPoint>, Mat), Error> {
-    let mut sift = SIFT::create(0, 10, 0.04, 10f64, 1.6, false).unwrap();
+pub fn sift(
+    image_1: &Mat,
+    nfeatures: i32,
+    n_octave_layers: i32,
+    contrast_threshold: f64,
+    edge_threshold: f64,
+    sigma: f64,
+    use_provided_keypoints: bool,
+) -> Result<(Vector<KeyPoint>, Mat), Error> {
+    let mut sift = SIFT::create(
+        nfeatures,
+        n_octave_layers,
+        contrast_threshold,
+        edge_threshold,
+        sigma,
+        use_provided_keypoints,
+    )
+    .unwrap();
 
     let mut keypoints_1 = Vector::<KeyPoint>::default();
 

@@ -2,12 +2,11 @@ use std::path::Path;
 
 use lib_cv::calibration::{get_charuco, perform_calibration};
 use lib_cv::utils::{combine_quadrants, split_image_into_quadrants, video_to_frames};
-use log::{debug, info};
+use log::info;
 use opencv::core::{Scalar, Vector};
+use opencv::highgui;
 use opencv::imgcodecs;
 use opencv::objdetect::draw_detected_corners_charuco;
-use opencv::videoio::VideoCapture;
-use opencv::{highgui, prelude::*};
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
@@ -17,7 +16,9 @@ fn main() {
     const PARSED_IMAGE_PATH: &str =
         "/home/watermelon0guy/Изображения/Experiments/raspberry_pi_cardboard/calibration/parsed";
     const VIDEO_PATH: &str =
-        "/home/watermelon0guy/Видео/Experiments/raspberry_pi_cardboard/20250602_101717_hires.mp4";
+        "/home/watermelon0guy/Видео/Experiments/raspberry_pi_cardboard/20250603_113751_hires.mp4";
+    const CAMERAS_PARAMS_PATH: &str =
+        "/home/watermelon0guy/Изображения/Experiments/raspberry_pi_cardboard/calibration";
     highgui::named_window("Charuco Доска", highgui::WINDOW_KEEPRATIO).unwrap();
 
     video_to_frames(Path::new(VIDEO_PATH), Path::new(PARSED_IMAGE_PATH)).unwrap();
@@ -28,18 +29,11 @@ fn main() {
     .unwrap();
     let charuco_board = opencv::objdetect::CharucoBoard::new_def(
         opencv::core::Size::new(10, 5),
-        28.333333333,
-        19.833,
+        13.0,
+        9.1,
         &dictionary,
     )
     .unwrap();
-    // let charuco_board = opencv::objdetect::CharucoBoard::new_def(
-    //     opencv::core::Size::new(5, 5),
-    //     20.0,
-    //     14.0,
-    //     &dictionary,
-    // )
-    // .unwrap();
 
     let mut current_i = 0;
     loop {
@@ -196,5 +190,10 @@ fn main() {
             _ => {}
         }
     }
-    perform_calibration(PICKED_IMAGE_PATH, &charuco_board, 4);
+    perform_calibration(
+        &PICKED_IMAGE_PATH,
+        &Path::new(CAMERAS_PARAMS_PATH),
+        &charuco_board,
+        4,
+    );
 }
