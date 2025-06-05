@@ -3,6 +3,7 @@ use lib_cv::correspondence::gather_points_2d_from_matches;
 use lib_cv::reconstruction::{
     PointCloud, add_color_to_point_cloud, filter_point_cloud_by_confindence,
     match_first_camera_features_to_all, min_visible_match_set, save_point_cloud,
+    undistort_points_single_camera,
 };
 use lib_cv::utils::split_image_into_quadrants;
 use log::{debug, error, info};
@@ -32,7 +33,6 @@ fn main() {
         opencv::videoio::CAP_ANY,
     )
     .unwrap();
-    let mut fr = 0;
 
     let start_time = Instant::now();
     let mut frame = opencv::core::Mat::default();
@@ -43,8 +43,6 @@ fn main() {
         frame.rows(),
         start_time.elapsed()
     );
-
-    let mut current_i = 0;
 
     let start_time = Instant::now();
     let images = match split_image_into_quadrants(&frame) {
@@ -62,7 +60,7 @@ fn main() {
         }
     };
 
-    let (mut all_matches, keypoints_list, descriptors_list) =
+    let (mut all_matches, keypoints_list, _descriptors_list) =
         match_first_camera_features_to_all(&images);
 
     let start_time = Instant::now();
@@ -77,11 +75,14 @@ fn main() {
     let points_2d: Vector<Mat> = match gather_points_2d_from_matches(&all_matches, &keypoints_list)
     {
         Ok(p_2d) => {
-            debug!("Матрицы подготовлены для undistort_points");
+            debug!("Координаты извлечены из массива общих совпадений");
             p_2d
         }
         Err(e) => {
-            error!("Ошибка конвертации матриц для undistort_points: {}", e);
+            error!(
+                "Ошибка извлечения координат из массива общих совпадений: {}",
+                e
+            );
             return;
         }
     };
@@ -96,37 +97,13 @@ fn main() {
     let mut undistorted_points_2d = Vector::<Mat>::default();
 
     for (i, points) in points_2d.iter().enumerate() {
-        let num_points = points.rows();
-        let mut undistorted_points = Mat::zeros(num_points, 1, opencv::core::CV_64FC2)
-            .unwrap()
-            .to_mat()
-            .unwrap();
-
-        // Исправление дисторсии
-        opencv::calib3d::undistort_points(
-            &points,
-            &mut undistorted_points,
-            &camera_params[i].intrinsic,
-            &camera_params[i].distortion,
-            &Mat::default(),             // Не используем R (матрицу ректификации)
-            &camera_params[i].intrinsic, // Используем исходную матрицу камеры как P
-        )
-        .unwrap();
-
-        // Преобразуем обратно в формат Nx2
-        let mut undistorted_nx2 = Mat::zeros(num_points, 2, opencv::core::CV_64F)
-            .unwrap()
-            .to_mat()
-            .unwrap();
-
-        for j in 0..num_points {
-            let pt = undistorted_points
-                .at_2d::<opencv::core::Vec2d>(j, 0)
-                .unwrap();
-
-            *undistorted_nx2.at_2d_mut::<f64>(j, 0).unwrap() = pt[0];
-            *undistorted_nx2.at_2d_mut::<f64>(j, 1).unwrap() = pt[1];
-        }
+        let undistorted_nx2 = match undistort_points_single_camera(&points, &camera_params[i]) {
+            Ok(u_nx2) => u_nx2,
+            Err(e) => {
+                error!("Ошибка в undistort_points_single_camera: {}", e);
+                return;
+            }
+        };
 
         undistorted_points_2d.push(undistorted_nx2);
     }
@@ -160,7 +137,7 @@ fn main() {
 
     let mut cloud = PointCloud {
         points: points_3d,
-        timestamp: current_i as usize,
+        timestamp: 0,
     };
 
     add_color_to_point_cloud(&mut cloud, &points_2d, &images[0]);
@@ -178,14 +155,13 @@ fn main() {
         start_time.elapsed()
     );
 
-    let filename = format!("{}/point_cloud_{}.ply", POINT_CLOUD_PATH, current_i);
+    let filename = format!("{}/point_cloud_{}.ply", POINT_CLOUD_PATH, 0);
     match save_point_cloud(&cloud, &filename) {
         Ok(_) => info!("Облако точек успешно сохранено в файл: {}", filename),
         Err(e) => error!("Ошибка при сохранении облака точек: {:?}", e),
     };
 
     let mut prev_image = images;
-    let mut next_image = Vec::default();
 
     let mut prev_points: Vec<Vector<Point2f>> =
         vec![Vector::<Point2f>::default(); camera_params.len()];
@@ -205,9 +181,9 @@ fn main() {
         }
     }
 
-    for frame_number in 1..50 {
+    for _frame_number in 1..50 {
         cap.read(&mut frame).unwrap();
-        next_image = match split_image_into_quadrants(&frame) {
+        let next_image = match split_image_into_quadrants(&frame) {
             Ok(it) => {
                 debug!("Изображение успешно разделено на {} части", it.len());
                 it
@@ -300,7 +276,6 @@ fn main() {
             )
             .unwrap();
 
-            // TODO
             prev_points[camera_i] = next_points;
         }
         prev_image = next_image.clone();

@@ -1,7 +1,8 @@
 use log::{debug, error, info, warn};
 use opencv::{
     Error,
-    core::{DMatch, KeyPoint, Mat, Point3d, StsError, Vector, gemm},
+    calib3d::undistort_points,
+    core::{DMatch, KeyPoint, Mat, Point3d, StsError, Vec2d, Vector, gemm},
     prelude::*,
     sfm::triangulate_points,
 };
@@ -450,4 +451,29 @@ pub fn add_color_to_point_cloud(
             point.color = Some((color[2], color[1], color[0])); // BGR -> RGB
         }
     }
+}
+
+pub fn undistort_points_single_camera(
+    points: &Mat, // Nx2, CV_64F
+    camera: &CameraParameters,
+) -> Result<Mat, Error> {
+    let num_points = points.rows();
+    let mut undistorted_points = Mat::zeros(num_points, 1, opencv::core::CV_64FC2)?.to_mat()?;
+
+    undistort_points(
+        points,
+        &mut undistorted_points,
+        &camera.intrinsic,
+        &camera.distortion,
+        &Mat::default(),
+        &camera.intrinsic,
+    )?;
+
+    let mut undistorted_nx2 = Mat::zeros(num_points, 2, opencv::core::CV_64F)?.to_mat()?;
+    for j in 0..num_points {
+        let pt = undistorted_points.at_2d::<Vec2d>(j, 0)?;
+        *undistorted_nx2.at_2d_mut::<f64>(j, 0)? = pt[0];
+        *undistorted_nx2.at_2d_mut::<f64>(j, 1)? = pt[1];
+    }
+    Ok(undistorted_nx2)
 }
