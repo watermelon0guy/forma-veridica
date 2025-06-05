@@ -1,4 +1,5 @@
 use lib_cv::calibration::load_camera_parameters;
+use lib_cv::correspondence::gather_points_2d_from_matches;
 use lib_cv::reconstruction::{
     PointCloud, add_color_to_point_cloud, filter_point_cloud_by_confindence,
     match_first_camera_features_to_all, min_visible_match_set, save_point_cloud,
@@ -68,43 +69,23 @@ fn main() {
 
     all_matches = min_visible_match_set(&mut all_matches, &keypoints_list);
 
-    info!("Фильтрация завершена за {:?}", start_time.elapsed());
+    debug!("Фильтрация завершена за {:?}", start_time.elapsed());
 
     let start_time = Instant::now();
 
     // Создаем матрицы с 2D точками для всех камер
-    let mut points_2d = Vector::<Mat>::default();
-
-    // Для первой (референсной) камеры
-    let num_matches = all_matches[0].len();
-    info!("Общее количество сопоставленных точек: {}", num_matches);
-    let mut points_cam_1 = Mat::zeros(num_matches as i32, 2, opencv::core::CV_64F)
-        .unwrap()
-        .to_mat()
-        .unwrap();
-
-    for (j, matches) in all_matches[0].iter().enumerate() {
-        let match_ref = matches.get(0).unwrap();
-        let kp = keypoints_list[0].get(match_ref.query_idx as usize).unwrap();
-        *points_cam_1.at_2d_mut::<f64>(j as i32, 0).unwrap() = kp.pt().x as f64;
-        *points_cam_1.at_2d_mut::<f64>(j as i32, 1).unwrap() = kp.pt().y as f64;
-    }
-    points_2d.push(points_cam_1);
-
-    for i in 1..camera_params.len() {
-        let mut points_cam = Mat::zeros(num_matches as i32, 2, opencv::core::CV_64F)
-            .unwrap()
-            .to_mat()
-            .unwrap();
-
-        for (j, matches) in all_matches[i - 1].iter().enumerate() {
-            let match_ref = matches.get(0).unwrap();
-            let kp = keypoints_list[i].get(match_ref.train_idx as usize).unwrap();
-            *points_cam.at_2d_mut::<f64>(j as i32, 0).unwrap() = kp.pt().x as f64;
-            *points_cam.at_2d_mut::<f64>(j as i32, 1).unwrap() = kp.pt().y as f64;
+    let points_2d: Vector<Mat> = match gather_points_2d_from_matches(&all_matches, &keypoints_list)
+    {
+        Ok(p_2d) => {
+            debug!("Матрицы подготовлены для undistort_points");
+            p_2d
         }
-        points_2d.push(points_cam);
-    }
+        Err(e) => {
+            error!("Ошибка конвертации матриц для undistort_points: {}", e);
+            return;
+        }
+    };
+
     info!(
         "Подготовка матриц точек завершена за {:?}",
         start_time.elapsed()

@@ -1,3 +1,4 @@
+use log::debug;
 use opencv::core::{DMatch, KeyPoint, NORM_L2, Vector};
 use opencv::features2d::{BFMatcher, SIFT};
 use opencv::prelude::*;
@@ -19,16 +20,14 @@ pub fn sift(
         edge_threshold,
         sigma,
         use_provided_keypoints,
-    )
-    .unwrap();
+    )?;
 
     let mut keypoints_1 = Vector::<KeyPoint>::default();
 
     let mut descriptors_1 = Mat::default();
 
     let mask = Mat::default();
-    sift.detect_and_compute_def(&image_1, &mask, &mut keypoints_1, &mut descriptors_1)
-        .unwrap();
+    sift.detect_and_compute_def(&image_1, &mask, &mut keypoints_1, &mut descriptors_1)?;
     Ok((keypoints_1, descriptors_1))
 }
 
@@ -79,4 +78,39 @@ pub fn bf_match_knn(
         .collect();
 
     Ok(filtered_matches)
+}
+
+pub fn gather_points_2d_from_matches(
+    all_matches: &Vec<Vector<Vector<DMatch>>>,
+    all_keypoints: &Vec<Vector<KeyPoint>>,
+) -> Result<Vector<Mat>, Error> {
+    // Создаем матрицы с 2D точками для всех камер
+    let mut points_2d = Vector::<Mat>::default();
+
+    // Для первой (референсной) камеры
+    let num_matches = all_matches[0].len();
+    debug!("Общее количество сопоставленных точек: {}", num_matches);
+    let mut points_cam_1 = Mat::zeros(num_matches as i32, 2, opencv::core::CV_64F)?.to_mat()?;
+
+    for (j, matches) in all_matches[0].iter().enumerate() {
+        let match_ref = matches.get(0)?;
+        let kp = all_keypoints[0].get(match_ref.query_idx as usize)?;
+        *points_cam_1.at_2d_mut::<f64>(j as i32, 0)? = kp.pt().x as f64;
+        *points_cam_1.at_2d_mut::<f64>(j as i32, 1)? = kp.pt().y as f64;
+    }
+    points_2d.push(points_cam_1);
+
+    for i in 1..all_matches.len() + 1 {
+        let mut points_cam = Mat::zeros(num_matches as i32, 2, opencv::core::CV_64F)?.to_mat()?;
+
+        for (j, matches) in all_matches[i - 1].iter().enumerate() {
+            let match_ref = matches.get(0)?;
+            let kp = all_keypoints[i].get(match_ref.train_idx as usize)?;
+            *points_cam.at_2d_mut::<f64>(j as i32, 0)? = kp.pt().x as f64;
+            *points_cam.at_2d_mut::<f64>(j as i32, 1)? = kp.pt().y as f64;
+        }
+        points_2d.push(points_cam);
+    }
+
+    Ok(points_2d)
 }
