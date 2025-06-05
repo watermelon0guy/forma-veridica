@@ -61,7 +61,7 @@ fn main() {
         }
     };
 
-    let (mut all_matches, mut keypoints_list, mut descriptors_list) =
+    let (mut all_matches, keypoints_list, descriptors_list) =
         match_first_camera_features_to_all(&images);
 
     let start_time = Instant::now();
@@ -206,15 +206,29 @@ fn main() {
     let mut prev_image = images;
     let mut next_image = Vec::default();
 
-    for frame_number in 1..5 {
+    let mut prev_points: Vec<Vector<Point2f>> =
+        vec![Vector::<Point2f>::default(); camera_params.len()];
+    for camera_i in 0..camera_params.len() {
+        for j in 0..points_2d.get(camera_i).unwrap().rows() {
+            let x = *points_2d
+                .get(camera_i as usize)
+                .unwrap()
+                .at_2d::<f64>(j, 0)
+                .unwrap() as f32;
+            let y = *points_2d
+                .get(camera_i as usize)
+                .unwrap()
+                .at_2d::<f64>(j, 1)
+                .unwrap() as f32;
+            prev_points[camera_i].push(opencv::core::Point2f::new(x, y));
+        }
+    }
+
+    for frame_number in 1..50 {
         cap.read(&mut frame).unwrap();
         next_image = match split_image_into_quadrants(&frame) {
             Ok(it) => {
-                debug!(
-                    "Изображение успешно разделено на {} части за {:?}",
-                    it.len(),
-                    start_time.elapsed()
-                );
+                debug!("Изображение успешно разделено на {} части", it.len());
                 it
             }
             Err(e) => {
@@ -223,34 +237,16 @@ fn main() {
             }
         };
 
-        let win_size = opencv::core::Size::new(50, 50);
-        let max_level = 5;
+        let win_size = opencv::core::Size::new(13, 13);
+        let max_level = 3;
         let criteria = opencv::core::TermCriteria::new(
             opencv::core::TermCriteria_EPS + opencv::core::TermCriteria_COUNT,
-            30,
-            0.01,
+            1000_000,
+            0.000_001,
         )
         .unwrap();
         let flags = 0;
         let min_eig_threshold = 1e-4;
-
-        let mut prev_points: Vec<Vector<Point2f>> =
-            vec![Vector::<Point2f>::default(); camera_params.len()];
-        for camera_i in 0..camera_params.len() {
-            for j in 0..points_2d.get(camera_i).unwrap().rows() {
-                let x = *points_2d
-                    .get(camera_i as usize)
-                    .unwrap()
-                    .at_2d::<f64>(j, 0)
-                    .unwrap() as f32;
-                let y = *points_2d
-                    .get(camera_i as usize)
-                    .unwrap()
-                    .at_2d::<f64>(j, 1)
-                    .unwrap() as f32;
-                prev_points[camera_i].push(opencv::core::Point2f::new(x, y));
-            }
-        }
 
         for (camera_i, (prev, next)) in prev_image.iter().zip(next_image.iter()).enumerate() {
             // Подготавливаем данные для оптического потока
@@ -274,6 +270,12 @@ fn main() {
                 min_eig_threshold,
             )
             .unwrap();
+
+            debug!(
+                "Потеряно треков: {}",
+                status.iter().filter(|&s| s == 0).count()
+            );
+
             // Если это первая камера, показываем точки на изображении
             if camera_i == 0 {
                 let mut display_image = next.clone();
@@ -320,5 +322,6 @@ fn main() {
             // TODO
             prev_points[camera_i] = next_points;
         }
+        prev_image = next_image.clone();
     }
 }
