@@ -3,7 +3,7 @@ use std::path::Path;
 use log::debug;
 use opencv::{
     Error,
-    core::{Vector, hconcat, vconcat},
+    core::{Point2f, Vector, hconcat, vconcat},
     prelude::*,
     videoio::VideoCapture,
 };
@@ -94,4 +94,15 @@ pub fn video_to_frames(path_to_video: &Path, parsed_image_folder_path: &Path) ->
         debug!("Обработано {}", frame_index);
     }
     Ok(())
+}
+
+pub fn vector_point2f_to_mat(points: &Vector<Point2f>) -> Result<Mat, Error> {
+    let num_points = points.len() as i32;
+    let mut mat = Mat::zeros(num_points, 2, opencv::core::CV_64F)?.to_mat()?;
+    for i in 0..num_points {
+        let p = points.get(i as usize)?;
+        *mat.at_2d_mut::<f64>(i, 0)? = p.x as f64;
+        *mat.at_2d_mut::<f64>(i, 1)? = p.y as f64;
+    }
+    Ok(mat)
 }
