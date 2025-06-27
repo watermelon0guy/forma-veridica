@@ -227,8 +227,11 @@ pub fn calibrate_multiple_with_charuco(
         for frame_idx in 0..charuco_ids[0].len() {
             let ids_cam1 = &charuco_ids[0].get(frame_idx)?;
             let ids_cam2 = &charuco_ids[i].get(frame_idx)?;
+            debug!("Содержимое ids_cam1: {:?}", ids_cam1);
+            debug!("Содержимое ids_cam2: {:?}", ids_cam2);
 
             let common: HashSet<i32> = find_common_points(&[ids_cam1.clone(), ids_cam2.clone()]);
+            debug!("Содержимое common: {:?}", common);
             debug!(
                 "Камера 0 и камера {}: найдено {} общих точек",
                 i,
@@ -255,6 +258,9 @@ pub fn calibrate_multiple_with_charuco(
                     idx_cam2.push(pos as i32);
                 }
             }
+
+            debug!("Содержимое idx_cam1: {:?}", idx_cam1);
+            debug!("Содержимое idx_cam2: {:?}", idx_cam2);
 
             let obj_points = select_rows(&object_points[0].get(frame_idx)?, &idx_cam1)?;
             let img_points1 = select_rows(&image_points[0].get(frame_idx)?, &idx_cam1)?;

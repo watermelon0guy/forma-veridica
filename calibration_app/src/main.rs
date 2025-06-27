@@ -6,7 +6,7 @@ use log::info;
 use opencv::core::{Scalar, Vector};
 use opencv::highgui;
 use opencv::imgcodecs;
-use opencv::objdetect::draw_detected_corners_charuco;
+use opencv::objdetect::{draw_detected_corners_charuco, draw_detected_markers};
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
@@ -59,8 +59,8 @@ fn main() {
         let img_4 = quadrants[3].clone();
 
         let Ok((
-            _marker_corners_1,
-            _marker_ids_1,
+            marker_corners_1,
+            marker_ids_1,
             charuco_corners_1,
             charuco_ids_1,
             _obj_points_1,
@@ -71,6 +71,13 @@ fn main() {
             continue;
         };
         let mut edited_1 = img_1.clone();
+        draw_detected_markers(
+            &mut edited_1,
+            &marker_corners_1,
+            &marker_ids_1,
+            Scalar::new(255.0, 0.0, 0.0, 255.0),
+        )
+        .expect("Не получилось нарисовать маркеры");
         draw_detected_corners_charuco(
             &mut edited_1,
             &charuco_corners_1,
@@ -80,8 +87,8 @@ fn main() {
         .expect("Не получилось нарисовать на изображении углы Charuco");
 
         let Ok((
-            _marker_corners_2,
-            _marker_ids_2,
+            marker_corners_2,
+            marker_ids_2,
             charuco_corners_2,
             charuco_ids_2,
             _obj_points_2,
@@ -92,6 +99,13 @@ fn main() {
             continue;
         };
         let mut edited_2 = img_2.clone();
+        draw_detected_markers(
+            &mut edited_2,
+            &marker_corners_2,
+            &marker_ids_2,
+            Scalar::new(255.0, 0.0, 0.0, 255.0),
+        )
+        .expect("Не получилось нарисовать маркеры");
         draw_detected_corners_charuco(
             &mut edited_2,
             &charuco_corners_2,
@@ -101,8 +115,8 @@ fn main() {
         .expect("Не получилось нарисовать на изображении углы Charuco");
 
         let Ok((
-            _marker_corners_3,
-            _marker_ids_3,
+            marker_corners_3,
+            marker_ids_3,
             charuco_corners_3,
             charuco_ids_3,
             _obj_points_3,
@@ -113,6 +127,13 @@ fn main() {
             continue;
         };
         let mut edited_3 = img_3.clone();
+        draw_detected_markers(
+            &mut edited_3,
+            &marker_corners_3,
+            &marker_ids_3,
+            Scalar::new(255.0, 0.0, 0.0, 255.0),
+        )
+        .expect("Не получилось нарисовать маркеры");
         draw_detected_corners_charuco(
             &mut edited_3,
             &charuco_corners_3,
@@ -122,8 +143,8 @@ fn main() {
         .expect("Не получилось нарисовать на изображении углы Charuco");
 
         let Ok((
-            _marker_corners_4,
-            _marker_ids_4,
+            marker_corners_4,
+            marker_ids_4,
             charuco_corners_4,
             charuco_ids_4,
             _obj_points_4,
@@ -134,6 +155,13 @@ fn main() {
             continue;
         };
         let mut edited_4 = img_4.clone();
+        draw_detected_markers(
+            &mut edited_4,
+            &marker_corners_4,
+            &marker_ids_4,
+            Scalar::new(255.0, 0.0, 0.0, 255.0),
+        )
+        .expect("Не получилось нарисовать маркеры");
         draw_detected_corners_charuco(
             &mut edited_4,
             &charuco_corners_4,
@@ -185,6 +213,19 @@ fn main() {
                 )
                 .unwrap();
                 info!("Изображения сохранены с timestamp: {}", timestamp);
+            }
+            101 => {
+                let timestamp = current_i.to_string();
+                imgcodecs::imwrite(
+                    &format!("{}/combined_{}.png", PICKED_IMAGE_PATH, timestamp),
+                    &edited_combined,
+                    &Vector::new(),
+                )
+                .unwrap();
+                info!(
+                    "Комбинированное изображение сохранено с timestamp: {}",
+                    timestamp
+                );
             }
             27 => break, // Escape key
             _ => {}

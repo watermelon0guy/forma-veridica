@@ -11,7 +11,7 @@ use opencv::core::{Point2f, Vector};
 use opencv::video::calc_optical_flow_pyr_lk;
 use opencv::videoio::VideoCapture;
 use opencv::{highgui, prelude::*};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
@@ -61,7 +61,7 @@ fn main() {
             return;
         }
     };
-
+    let sift_time = Instant::now();
     let (mut all_matches, keypoints_list, _descriptors_list) =
         match_first_camera_features_to_all(&images);
 
@@ -72,7 +72,7 @@ fn main() {
     debug!("Фильтрация завершена за {:?}", start_time.elapsed());
 
     let start_time = Instant::now();
-
+    debug!("SIFT TIME: {:?}", sift_time.elapsed());
     // Создаем матрицы с 2D точками для всех камер
     let points_2d: Vector<Mat> = match gather_points_2d_from_matches(&all_matches, &keypoints_list)
     {
@@ -183,6 +183,7 @@ fn main() {
         }
     }
 
+    let mut optical_time_sum: Duration = Duration::default();
     while cap.read(&mut frame).unwrap() {
         current_frame += 1;
         let next_image = match split_image_into_quadrants(&frame) {
@@ -216,7 +217,7 @@ fn main() {
             let mut err = Vector::<f32>::default();
 
             // Преобразуем points_2d в формат для оптического потока (используем точки первой камеры)
-
+            let optical_time = Instant::now();
             calc_optical_flow_pyr_lk(
                 &prev,
                 &next,
@@ -231,6 +232,7 @@ fn main() {
                 min_eig_threshold,
             )
             .unwrap();
+            optical_time_sum += optical_time.elapsed();
 
             debug!(
                 "Потеряно треков: {}",
@@ -283,15 +285,16 @@ fn main() {
             prev_points[camera_i] = next_points;
         }
 
+        debug!("OPTICAL TIME SUM: {:?}", optical_time_sum);
+
         let points_3d = match lib_cv::reconstruction::triangulate_points_multiple(
             &undistorted_points_2d,
             &camera_params,
         ) {
             Ok(points) => {
                 info!(
-                    "Триангуляция успешно выполнена. Получено {} 3D точек за {:?}",
-                    points.len(),
-                    start_time.elapsed()
+                    "Триангуляция успешно выполнена. Получено {} 3D точек",
+                    points.len()
                 );
                 points
             }
@@ -316,10 +319,7 @@ fn main() {
             initial_count - cloud.points.len(),
             cloud.points.len()
         );
-        info!(
-            "Обработка облака точек завершена за {:?}",
-            start_time.elapsed()
-        );
+        info!("Обработка облака точек завершена");
 
         let filename = format!("{}/point_cloud_{}.ply", POINT_CLOUD_PATH, current_frame);
         match save_point_cloud(&cloud, &filename) {
@@ -329,4 +329,8 @@ fn main() {
 
         prev_image = next_image.clone();
     }
+    debug!(
+        "OPTICAL TIME: {:?}",
+        optical_time_sum / (current_frame as u32 - 1)
+    )
 }
