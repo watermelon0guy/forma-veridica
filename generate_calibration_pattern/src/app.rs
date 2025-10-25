@@ -45,8 +45,8 @@ impl GenCalibPatternApp {
         let mut mat_image = Mat::default();
         charuco_board.generate_image(
             opencv::core::Size::new(
-                self.size.width * self.square_length as i32 * 10,
-                self.size.height * self.square_length as i32 * 10,
+                self.size.width * self.square_length * 2,
+                self.size.height * self.square_length * 2,
             ),
             &mut mat_image,
             20,
@@ -59,27 +59,25 @@ impl GenCalibPatternApp {
         Ok(color_image)
     }
 
-    pub fn set_texture_handler(&mut self, ctx: &eframe::egui::Context) {
+    pub fn set_texture_handler(
+        &mut self,
+        ctx: &eframe::egui::Context,
+    ) -> Result<(), opencv::Error> {
         let color_image = match self.generate_pattern() {
             Ok(image) => image,
-            Err(e) => {
-                eprintln!("Ошибка генерации паттерна: {}", e);
-                // Создаем пустое изображение в случае ошибки
-                eframe::egui::ColorImage::new([10, 5], eframe::epaint::Color32::WHITE)
-            }
+            Err(e) => return Err(e),
         };
 
         if let Some(handle) = &mut self.texture_handle {
-            // Если текстура УЖЕ существует - ОБНОВЛЯЕМ её содержимое
-            handle.set(color_image, eframe::egui::TextureOptions::default());
+            handle.set(color_image, eframe::egui::TextureOptions::NEAREST);
         } else {
-            // Если текстуры ЕЩЁ НЕТ - СОЗДАЁМ новую
             self.texture_handle = Some(ctx.load_texture(
                 "pattern_texture",
                 color_image,
-                eframe::egui::TextureOptions::default(),
+                eframe::egui::TextureOptions::NEAREST,
             ));
         }
+        Ok(())
     }
 }
 
@@ -122,7 +120,7 @@ impl eframe::App for GenCalibPatternApp {
         });
 
         eframe::egui::CentralPanel::default().show(ctx, |ui| {
-            self.set_texture_handler(&ctx);
+            let _ = self.set_texture_handler(&ctx);
             if let Some(texture) = &self.texture_handle {
                 ui.centered_and_justified(|ui| {
                     ui.add(eframe::egui::Image::from_texture(texture).shrink_to_fit())
