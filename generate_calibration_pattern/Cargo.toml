@@ -6,3 +6,5 @@ edition = "2024"
 [dependencies]
 lib_cv = { path = "../lib_cv" }
 opencv = { workspace = true }
+eframe = { workspace = true }
+serde = { workspace = true }
