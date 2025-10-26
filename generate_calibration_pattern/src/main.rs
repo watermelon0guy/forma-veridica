@@ -12,6 +12,9 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "ChArUco Generator",
         options,
-        Box::new(|_cc| Ok(Box::new(GenCalibPatternApp::new()))),
+        Box::new(|_cc| {
+            _cc.egui_ctx.set_pixels_per_point(1.5);
+            Ok(Box::new(GenCalibPatternApp::new()))
+        }),
     )
 }
