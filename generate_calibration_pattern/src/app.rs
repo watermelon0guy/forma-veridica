@@ -1,6 +1,6 @@
 use std::ops::RangeInclusive;
 
-use eframe::egui::{ColorImage, SliderClamping};
+use eframe::egui::{self, ColorImage, SliderClamping};
 use opencv::{Error, core::Size, imgproc, objdetect::PredefinedDictionaryType, prelude::*};
 
 pub struct GenCalibPatternApp {
@@ -64,8 +64,8 @@ impl Default for GenCalibPatternApp {
         Self {
             texture_handle: None,
             size: Size::new(10, 7),
-            square_length: 10,
-            marker_length: 7,
+            square_length: 60,
+            marker_length: 42,
             dictionary: ChArUcoDict::default(),
             dictionaries,
         }
@@ -83,9 +83,8 @@ impl GenCalibPatternApp {
         Self::default()
     }
 
-    pub fn generate_pattern(&mut self) -> Result<ColorImage, Error> {
-        let dictionary =
-            opencv::objdetect::get_predefined_dictionary(self.dictionary.type_opencv).unwrap();
+    pub fn generate_pattern_mat_rgb(&mut self) -> Result<Mat, Error> {
+        let dictionary = opencv::objdetect::get_predefined_dictionary(self.dictionary.type_opencv)?;
         let charuco_board = opencv::objdetect::CharucoBoard::new_def(
             self.size,
             self.square_length as f32,
@@ -102,10 +101,16 @@ impl GenCalibPatternApp {
             0,
             1,
         )?;
-        let frame_size = [mat_image.cols() as usize, mat_image.rows() as usize];
+
         let mut rgb_image = opencv::core::Mat::default();
-        imgproc::cvt_color_def(&mat_image, &mut rgb_image, imgproc::COLOR_BGR2RGB).unwrap();
-        let color_image = eframe::egui::ColorImage::from_rgb(frame_size, rgb_image.data_bytes()?);
+        imgproc::cvt_color_def(&mat_image, &mut rgb_image, imgproc::COLOR_BGR2RGB)?;
+        Ok(rgb_image)
+    }
+
+    pub fn generate_pattern(&mut self) -> Result<ColorImage, Error> {
+        let mat_image = self.generate_pattern_mat_rgb()?;
+        let frame_size = [mat_image.cols() as usize, mat_image.rows() as usize];
+        let color_image = eframe::egui::ColorImage::from_rgb(frame_size, mat_image.data_bytes()?);
         Ok(color_image)
     }
 
@@ -129,6 +134,38 @@ impl GenCalibPatternApp {
         }
         Ok(())
     }
+
+    pub fn save_pattern(&mut self) -> Result<(), Error> {
+        let path = match rfd::FileDialog::new()
+            .add_filter("PNG изображения", &["png"])
+            .set_title("Сохранить калибровочный паттерн")
+            .set_file_name(&self.generate_filename())
+            .save_file()
+        {
+            Some(path) => path,
+            None => {
+                return Err(Error::new(
+                    opencv::core::StsError,
+                    "Не выбран файл для сохранения",
+                ));
+            }
+        };
+
+        // Сохраняем файл
+        opencv::imgcodecs::imwrite(
+            &path.to_string_lossy(),
+            &self.generate_pattern_mat_rgb()?,
+            &opencv::core::Vector::new(),
+        )?;
+        Ok(())
+    }
+
+    fn generate_filename(&self) -> String {
+        format!(
+            "charuco_pattern_{}x{}_{}.png",
+            self.size.height, self.size.width, self.dictionary.amount
+        )
+    }
 }
 
 impl eframe::App for GenCalibPatternApp {
@@ -140,7 +177,7 @@ impl eframe::App for GenCalibPatternApp {
                     RangeInclusive::new(1, self.dictionary.amount * 2 / self.size.width),
                 )
                 .text("Длина")
-                .clamping(SliderClamping::Never),
+                .clamping(SliderClamping::Always),
             );
             ui.add(
                 eframe::egui::Slider::new(
@@ -148,7 +185,7 @@ impl eframe::App for GenCalibPatternApp {
                     RangeInclusive::new(1, self.dictionary.amount * 2 / self.size.height),
                 )
                 .text("Ширина")
-                .clamping(SliderClamping::Never),
+                .clamping(SliderClamping::Always),
             );
             ui.add(
                 eframe::egui::Slider::new(
@@ -170,7 +207,10 @@ impl eframe::App for GenCalibPatternApp {
                     for d in &self.dictionaries {
                         ui.selectable_value(&mut self.dictionary, d.clone(), &d.name);
                     }
-                })
+                });
+            if ui.add(egui::Button::new("Сохранить паттерн")).clicked() {
+                let _ = self.save_pattern();
+            }
         });
 
         eframe::egui::CentralPanel::default().show(ctx, |ui| {

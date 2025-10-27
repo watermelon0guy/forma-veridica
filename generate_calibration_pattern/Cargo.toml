@@ -8,3 +8,4 @@ lib_cv = { path = "../lib_cv" }
 opencv = { workspace = true }
 eframe = { workspace = true }
 serde = { workspace = true }
+rfd = { workspace = true }
