@@ -8,7 +8,7 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-opencv = { version = "0.94.4", default-features = false, features = [
+opencv = { version = "0.97.2", default-features = false, features = [
     "imgproc",
     "imgcodecs",
     "highgui",
