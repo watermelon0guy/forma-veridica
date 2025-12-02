@@ -4,7 +4,6 @@ use lib_cv::utils::split_video_into_quadrants;
 use opencv::prelude::*;
 use opencv::videoio;
 
-use std::path::Path;
 use std::{fs::create_dir_all, path::PathBuf};
 
 pub struct ReconstructionApp {
@@ -350,7 +349,23 @@ impl ReconstructionApp {
         }
     }
 
+    fn fetch_video_data(&mut self) {
+        let project_path = self.resources.project_path.as_ref().unwrap();
+        let video_files: Vec<Option<PathBuf>> = match project_path.join("data/video").read_dir() {
+            Ok(read_dir) => read_dir
+                .filter_map(|entry| entry.ok())
+                .map(|entry| Some(entry.path()))
+                .collect(),
+            Err(_) => vec![],
+        };
+        if let Ok(video_data) = VideoData::from_vec(video_files) {
+            self.resources.video_data = Some(video_data);
+        }
+    }
+
     fn fetch_project(&mut self, ui: &mut egui::Ui) {
+        self.fetch_camera_params();
+        self.fetch_video_data();
         self.pipeline_state = PipelineState::SetupMenu;
     }
 }
