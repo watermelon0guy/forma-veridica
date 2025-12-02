@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use log::debug;
 use opencv::{
@@ -39,6 +39,62 @@ pub fn split_image_into_quadrants(img: &Mat) -> Result<Vec<Mat>, Error> {
     let mut cropped_4 = Mat::default();
     roi_4.copy_to(&mut cropped_4).unwrap();
     Ok(vec![cropped_1, cropped_2, cropped_3, cropped_4])
+}
+
+pub fn split_video_into_quadrants(
+    path_to_video: &Path,
+    path_to_save: &Path,
+    file_name: &str,
+) -> Result<Vec<PathBuf>, Error> {
+    let mut cap = VideoCapture::from_file(
+        path_to_video
+            .to_str()
+            .ok_or_else(|| Error::new(-1, "Неправильный путь к видео"))?,
+        opencv::videoio::CAP_ANY,
+    )?;
+    let mut frame = opencv::core::Mat::default();
+    let mut frame_index = 0;
+
+    let fourcc = opencv::videoio::VideoWriter::fourcc('m', 'p', '4', 'v')?;
+    let fps = cap.get(opencv::videoio::CAP_PROP_FPS)?;
+    let width = cap.get(opencv::videoio::CAP_PROP_FRAME_WIDTH)? as i32;
+    let height = cap.get(opencv::videoio::CAP_PROP_FRAME_HEIGHT)? as i32;
+
+    let quadrant_width = width / 2;
+    let quadrant_height = height / 2;
+
+    let mut writers = Vec::new();
+    let mut paths = Vec::new();
+    for i in 0..4 {
+        let output_path = path_to_save.join(format!("{}_{}.mp4", file_name, i));
+        let writer = opencv::videoio::VideoWriter::new(
+            output_path
+                .to_str()
+                .ok_or_else(|| Error::new(-1, "Неправильный путь для сохранения"))?,
+            fourcc,
+            fps,
+            opencv::core::Size::new(quadrant_width, quadrant_height),
+            true,
+        )?;
+        writers.push(writer);
+        paths.push(output_path);
+    }
+
+    while cap.read(&mut frame)? {
+        let quadrants = split_image_into_quadrants(&frame)?;
+        for (i, quadrant) in quadrants.into_iter().enumerate() {
+            writers[i].write(&quadrant)?;
+        }
+
+        frame_index += 1;
+        debug!("Обработан кадр {}", frame_index);
+    }
+
+    for mut writer in writers {
+        writer.release()?;
+    }
+
+    Ok(paths)
 }
 
 pub fn combine_quadrants(
