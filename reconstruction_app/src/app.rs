@@ -1,23 +1,27 @@
-use eframe::egui;
-use lib_cv::calibration::{CameraParameters, load_camera_parameters};
+use lib_cv::calibration::load_camera_parameters;
 use lib_cv::correspondence::gather_points_2d_from_matches;
 use lib_cv::reconstruction::{
     PointCloud, add_color_to_point_cloud, filter_point_cloud_by_confindence,
     match_first_camera_features_to_all, min_visible_match_set, save_point_cloud,
     undistort_points_single_camera,
 };
-use lib_cv::utils::{split_video_into_quadrants, vector_point2f_to_mat};
+use lib_cv::utils::{
+    open_video_captures, read_frames, split_video_into_quadrants, vector_point2f_to_mat,
+};
 use log::{debug, error, info};
 use opencv::core::{Point2f, Vector};
 use opencv::video::calc_optical_flow_pyr_lk;
-use opencv::videoio::{self, VideoCapture};
+use opencv::videoio::VideoCapture;
 use opencv::{Error, prelude::*};
 
 use std::{fs::create_dir_all, path::PathBuf};
 
-pub struct ReconstructionApp {
-    resources: ProjectResources,
-    pipeline_state: PipelineState,
+use crate::model::{CalibrationData, PipelineState, ProjectResources, VideoData};
+use crate::ui::UiRenderer;
+
+pub(crate) struct ReconstructionApp {
+    pub resources: ProjectResources,
+    pub pipeline_state: PipelineState,
 }
 
 impl Default for ReconstructionApp {
@@ -29,80 +33,9 @@ impl Default for ReconstructionApp {
     }
 }
 
-#[derive(Default)]
-struct ProjectResources {
-    project_path: Option<PathBuf>,
-    calibration_data: Option<CalibrationData>,
-    video_data: Option<VideoData>,
-}
-
-struct CalibrationData {
-    calibration_file: PathBuf,
-    camera_params: Vec<CameraParameters>,
-    num_cameras: usize,
-}
-
-impl CalibrationData {
-    fn new(calibration_file: PathBuf, camera_params: Vec<CameraParameters>) -> Self {
-        let num_cameras = camera_params.len();
-        Self {
-            calibration_file,
-            camera_params,
-            num_cameras,
-        }
-    }
-}
-
-struct VideoData {
-    video_files: Vec<Option<PathBuf>>,
-    total_frames: usize,
-}
-
-impl VideoData {
-    fn new(video_file: &PathBuf, cam_i: usize, num_cams: usize) -> Result<Self, opencv::Error> {
-        let mut video_files = vec![None; num_cams];
-        video_files[cam_i] = Some(video_file.clone());
-        let total_frames = {
-            let cap =
-                videoio::VideoCapture::from_file(&video_file.to_string_lossy(), videoio::CAP_ANY)?;
-            cap.get(videoio::CAP_PROP_FRAME_COUNT)? as usize
-        };
-        Ok(Self {
-            video_files,
-            total_frames,
-        })
-    }
-
-    fn from_vec(video_files: Vec<Option<PathBuf>>) -> Result<Self, opencv::Error> {
-        let total_frames = {
-            let first_video = video_files
-                .get(0)
-                .ok_or(opencv::Error::new(-1, "No video files provided"))?
-                .as_ref()
-                .ok_or(opencv::Error::new(-1, "First video path is None"))?;
-            let cap =
-                videoio::VideoCapture::from_file(&first_video.to_string_lossy(), videoio::CAP_ANY)?;
-            cap.get(videoio::CAP_PROP_FRAME_COUNT)? as usize
-        };
-        Ok(Self {
-            video_files,
-            total_frames,
-        })
-    }
-}
-
-#[derive(Default)]
-enum PipelineState {
-    #[default]
-    FolderSetup,
-    FetchProject,
-    SetupMenu,
-    ReadyToProcess,
-}
-
 impl eframe::App for ReconstructionApp {
     fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
-        self.render_content(ctx);
+        UiRenderer::render_content(self, ctx);
     }
 }
 
@@ -111,186 +44,31 @@ impl ReconstructionApp {
         Self::default()
     }
 
-    fn render_content(&mut self, ctx: &egui::Context) {
-        egui::CentralPanel::default().show(ctx, |ui| match self.pipeline_state {
-            PipelineState::FolderSetup => self.render_folder_setup(ui),
-            PipelineState::FetchProject => self.fetch_project(ui),
-            PipelineState::SetupMenu => self.render_setup_menu(ui),
-            PipelineState::ReadyToProcess => todo!(),
-        });
-    }
-
-    fn render_folder_setup(&mut self, ui: &mut egui::Ui) {
-        ui.vertical_centered(|ui| {
-            ui.label(
-                egui::RichText::new("Выберите папку где находится или будет находится проект")
-                    .size(18.0),
-            );
-            let button = egui::Button::new(egui::RichText::new("Выбрать").size(18.0))
-                .min_size(egui::vec2(140.0, 40.0));
-
-            if ui.add(button).clicked() {
-                match rfd::FileDialog::new()
-                    .set_title("Выбрать папку проекта")
-                    .pick_folder()
-                {
-                    Some(p) => {
-                        self.resources = ProjectResources {
-                            project_path: Some(p),
-                            calibration_data: None,
-                            video_data: None,
-                        };
-                        self.pipeline_state = PipelineState::FetchProject // Переходим к следующему этапу
-                    }
-                    None => return,
-                }
-            }
-        });
-    }
-
-    fn render_setup_menu(&mut self, ui: &mut egui::Ui) {
-        ui.vertical_centered(|ui| {
-            ui.label(egui::RichText::new(format!(
-                "Путь проекта теперь установлен в {}",
-                self.resources.project_path.as_ref().unwrap().display()
-            )))
-        });
-
-        ui.columns(2, |columns| {
-            self.render_camera_parameters_setup(&mut columns[0]);
-            self.render_video_setup(&mut columns[1]);
-        });
-
-        self.button_start_reconstruction(ui);
-    }
-
-    fn button_start_reconstruction(&mut self, ui: &mut egui::Ui) {
-        let is_enabled = self.resources.calibration_data.is_some()
-            && self
-                .resources
-                .video_data
-                .as_ref()
-                .map_or(false, |vd| vd.video_files.iter().all(|vf| vf.is_some()));
-
-        let button = egui::Button::new(egui::RichText::new("Начать реконструкцию").size(18.0))
-            .min_size(egui::vec2(140.0, 40.0));
-        ui.vertical_centered(|ui| {
-            if ui.add_enabled(is_enabled, button).clicked() {
-                self.run_pipeline();
-            };
-        });
-    }
-
-    fn render_camera_parameters_setup(&mut self, ui: &mut egui::Ui) {
-        ui.vertical_centered(|ui| {
-            ui.heading("Параметры камеры");
-
-            match &self.resources.calibration_data {
-                None => {
-                    ui.label(egui::RichText::new("Выберите файл с параметрами камер"));
-                    let button = egui::Button::new(egui::RichText::new("Выбрать").size(18.0))
-                        .min_size(egui::vec2(140.0, 40.0));
-
-                    if ui.add(button).clicked() {
-                        self.pick_camera_parameters_file();
-                    }
-                }
-                Some(calib_data) => {
-                    let num_cam = calib_data.num_cameras;
-                    ui.label(format!("В параметрах найдено {num_cam} камеры"));
-                    let button =
-                        egui::Button::new(egui::RichText::new("Изменить параметры").size(18.0))
-                            .min_size(egui::vec2(140.0, 40.0));
-                    if ui.add(button).clicked() {
-                        self.pick_camera_parameters_file();
-
-                        match &self.resources.video_data {
-                            Some(vd) => {
-                                if vd.video_files.len() != num_cam {
-                                    self.resources.video_data = None
-                                }
-                            }
-                            None => (),
-                        }
-                    }
-                }
-            }
-        });
-    }
-
-    fn pick_camera_parameters_file(&mut self) {
-        match rfd::FileDialog::new()
-            .set_title("Выбрать файл параметров")
-            .pick_file()
-        {
-            Some(file_path) => {
-                let project_path = self.resources.project_path.as_ref().unwrap();
-                let dest_path = project_path.join("camera_parameters.yml");
-
-                if let Err(_) = std::fs::copy(&file_path, &dest_path) {
-                    return;
-                }
-
-                let cam_params = match load_camera_parameters(dest_path.to_str().unwrap()) {
-                    Ok(c) => c,
-                    Err(_) => return,
-                };
-                self.resources.calibration_data = Some(CalibrationData::new(dest_path, cam_params));
-            }
-            None => return,
-        }
-    }
-
-    fn render_video_setup(&mut self, ui: &mut egui::Ui) {
-        ui.vertical_centered(|ui| {
-            ui.heading("Видео для анализа");
-
-            match &self.resources.calibration_data {
-                Some(cb) => {
-                    for cam_num in 0..cb.num_cameras {
-                        self.button_to_choose_video(ui, cam_num);
-                    }
-                }
-                None => {
-                    ui.label(
-                        egui::RichText::new("Выберите параметры камер")
-                            .size(18.0)
-                            .color(egui::Color32::YELLOW),
-                    );
-                }
-            }
-
-            self.button_to_choose_4_combined_video(ui);
-        });
-    }
-
-    fn button_to_choose_video(&mut self, ui: &mut egui::Ui, cam_num: usize) {
-        let action = match self
-            .resources
-            .video_data
-            .as_ref()
-            .and_then(|vd| vd.video_files.get(cam_num))
-        {
-            Some(Some(_)) => "Изменить",
-            _ => "Выбрать",
+    pub(crate) fn set_project_folder(&mut self, p: std::path::PathBuf) {
+        self.resources = ProjectResources {
+            project_path: Some(p),
+            calibration_data: None,
+            video_data: None,
         };
-
-        let button = egui::Button::new(
-            egui::RichText::new(format!(
-                "{} видео для {} камеры",
-                action,
-                cam_num + 1 // TODO решить как печатать номера камер. Всегда ли с +1?
-            ))
-            .size(18.0),
-        )
-        .min_size(egui::vec2(140.0, 40.0));
-
-        if ui.add(button).clicked() {
-            self.pick_camera_video(cam_num);
-        }
+        self.pipeline_state = PipelineState::FetchProject
     }
 
-    fn pick_camera_video(&mut self, cam_num: usize) {
+    pub(crate) fn load_camera_parameters(&mut self, path: PathBuf) {
+        let project_path = self.resources.project_path.as_ref().unwrap();
+        let dest_path = project_path.join("camera_parameters.yml");
+
+        if let Err(_) = std::fs::copy(&path, &dest_path) {
+            return;
+        }
+
+        let cam_params = match load_camera_parameters(dest_path.to_str().unwrap()) {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        self.resources.calibration_data = Some(CalibrationData::new(dest_path, cam_params));
+    }
+
+    pub(crate) fn pick_camera_video(&mut self, cam_num: usize) {
         // Не самая понятная функция конечно...
         match rfd::FileDialog::new()
             .add_filter("Видео", &["mp4"])
@@ -329,42 +107,34 @@ impl ReconstructionApp {
         }
     }
 
-    fn button_to_choose_4_combined_video(&mut self, ui: &mut egui::Ui) {
-        let button =
-            egui::Button::new(egui::RichText::new("Выделить из комбинированного видео").size(18.0))
-                .min_size(egui::vec2(140.0, 40.0));
-
-        if ui.add(button).clicked() {
-            self.pick_from_4_combined_video();
-        }
-    }
-
-    fn pick_from_4_combined_video(&mut self) {
-        match rfd::FileDialog::new()
+    pub(crate) fn pick_from_4_combined_video(&mut self) {
+        if let Some(file_path) = rfd::FileDialog::new()
             .add_filter("Видео", &["mp4"])
             .set_title("Выбрать видео")
             .pick_file()
         {
-            Some(file_path) => {
-                let project_path = self.resources.project_path.as_ref().unwrap();
-                let dest_path = project_path.join("data/video");
-                if let Err(_) = create_dir_all(&dest_path) {
-                    return;
-                }
+            let project_path = self.resources.project_path.as_ref().unwrap();
+            let dest_path = project_path.join("data/video");
+            if let Err(_) = create_dir_all(&dest_path) {
+                return;
+            }
 
-                if let Ok(paths) = split_video_into_quadrants(&file_path, &dest_path, "camera") {
-                    let paths: Vec<Option<PathBuf>> =
-                        paths.iter().map(|p| Some(p.clone())).collect();
-                    if let Ok(vd) = VideoData::from_vec(paths) {
-                        self.resources.video_data = Some(vd);
-                    }
+            if let Ok(paths) = split_video_into_quadrants(&file_path, &dest_path, "camera") {
+                let paths: Vec<Option<PathBuf>> = paths.iter().map(|p| Some(p.clone())).collect();
+                if let Ok(vd) = VideoData::from_vec(paths) {
+                    self.resources.video_data = Some(vd);
                 }
             }
-            None => return,
         }
     }
 
-    fn fetch_camera_params(&mut self) {
+    pub(crate) fn fetch_project(&mut self) {
+        self.fetch_camera_params();
+        self.fetch_video_data();
+        self.pipeline_state = PipelineState::SetupMenu;
+    }
+
+    pub(crate) fn fetch_camera_params(&mut self) {
         let project_path = self.resources.project_path.as_ref().unwrap();
         let file_path = project_path.join("camera_parameters.yml");
 
@@ -377,7 +147,7 @@ impl ReconstructionApp {
         }
     }
 
-    fn fetch_video_data(&mut self) {
+    pub(crate) fn fetch_video_data(&mut self) {
         let project_path = self.resources.project_path.as_ref().unwrap();
         let video_files: Vec<Option<PathBuf>> = match project_path.join("data/video").read_dir() {
             Ok(read_dir) => read_dir
@@ -391,13 +161,7 @@ impl ReconstructionApp {
         }
     }
 
-    fn fetch_project(&mut self, _ui: &mut egui::Ui) {
-        self.fetch_camera_params();
-        self.fetch_video_data();
-        self.pipeline_state = PipelineState::SetupMenu;
-    }
-
-    fn run_pipeline(&self) -> Result<(), opencv::Error> {
+    pub(crate) fn run_pipeline(&self) -> Result<(), opencv::Error> {
         let mut caps: Vec<VideoCapture> = Vec::new();
 
         let video_data = self
@@ -469,7 +233,7 @@ impl ReconstructionApp {
             }
         };
 
-        let mut current_frame: usize = 0;
+        let current_frame: usize = 0;
 
         let mut cloud = PointCloud {
             points: points_3d,
@@ -635,29 +399,4 @@ impl ReconstructionApp {
 
         Ok(())
     }
-}
-
-fn open_video_captures(
-    caps: &mut Vec<VideoCapture>,
-    video_files: &Vec<Option<PathBuf>>,
-) -> Result<(), Error> {
-    Ok(for video_file in video_files.iter() {
-        let cap = VideoCapture::from_file(
-            video_file
-                .as_ref()
-                .ok_or_else(|| Error::new(-1, "Неправильный путь к видео"))?
-                .to_str()
-                .ok_or_else(|| Error::new(-1, "Путь к видео не является валидной UTF-8 строкой"))?,
-            opencv::videoio::CAP_ANY,
-        )?;
-        caps.push(cap);
-    })
-}
-
-fn read_frames(caps: &mut Vec<VideoCapture>, frames: &mut Vec<Mat>) -> Result<(), Error> {
-    for (i, cap) in caps.iter_mut().enumerate() {
-        let mut frame = &mut frames[i];
-        cap.read(&mut frame)?;
-    }
-    Ok(())
 }

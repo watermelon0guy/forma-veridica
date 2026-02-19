@@ -5,7 +5,7 @@ use opencv::{
     Error,
     core::{Point2f, Vector, hconcat, vconcat},
     prelude::*,
-    videoio::VideoCapture,
+    videoio::{CAP_ANY, CAP_PROP_FRAME_COUNT, VideoCapture},
 };
 
 pub fn split_image_into_quadrants(img: &Mat) -> Result<Vec<Mat>, Error> {
@@ -161,4 +161,34 @@ pub fn vector_point2f_to_mat(points: &Vector<Point2f>) -> Result<Mat, Error> {
         *mat.at_2d_mut::<f64>(i, 1)? = p.y as f64;
     }
     Ok(mat)
+}
+
+pub fn open_video_captures(
+    caps: &mut Vec<VideoCapture>,
+    video_files: &Vec<Option<PathBuf>>,
+) -> Result<(), Error> {
+    Ok(for video_file in video_files.iter() {
+        let cap = VideoCapture::from_file(
+            video_file
+                .as_ref()
+                .ok_or_else(|| Error::new(-1, "Неправильный путь к видео"))?
+                .to_str()
+                .ok_or_else(|| Error::new(-1, "Путь к видео не является валидной UTF-8 строкой"))?,
+            opencv::videoio::CAP_ANY,
+        )?;
+        caps.push(cap);
+    })
+}
+
+pub fn read_frames(caps: &mut Vec<VideoCapture>, frames: &mut Vec<Mat>) -> Result<(), Error> {
+    for (i, cap) in caps.iter_mut().enumerate() {
+        let mut frame = &mut frames[i];
+        cap.read(&mut frame)?;
+    }
+    Ok(())
+}
+
+pub fn get_video_frame_count(video_file: &PathBuf) -> Result<usize, Error> {
+    let cap = VideoCapture::from_file(&video_file.to_string_lossy(), CAP_ANY)?;
+    Ok(cap.get(CAP_PROP_FRAME_COUNT)? as usize)
 }

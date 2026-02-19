@@ -1,8 +1,14 @@
 use eframe;
 mod app;
+mod model;
+mod ui;
 
 fn main() -> eframe::Result<()> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn"))
+        .filter_module("reconstruction_app", log::LevelFilter::Info)
+        .filter_module("lib_cv", log::LevelFilter::Info)
+        .init();
+
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_inner_size([1000.0, 700.0])
