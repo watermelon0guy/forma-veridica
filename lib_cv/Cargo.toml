@@ -4,6 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-opencv = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
+image = { workspace = true }
+video-rs = { workspace = true }
+calib-targets = { workspace = true }
+vision-calibration= { workspace = true }
+sift-wgpu = { workspace = true }
+kiddo = { workspace = true }
+nalgebra = { workspace = true }
+ndarray = { workspace = true }

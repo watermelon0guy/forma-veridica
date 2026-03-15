@@ -8,17 +8,6 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-opencv = { version = "0.97.2", default-features = false, features = [
-    "imgproc",
-    "imgcodecs",
-    "highgui",
-    "videoio",
-    "calib3d",
-    "sfm",
-    "objdetect",
-    "video",
-    "dnn",
-] }
 log = "0.4.29"
 env_logger = "0.11.9"
 eframe = "0.33.3"
