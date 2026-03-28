@@ -7,3 +7,7 @@ edition = "2024"
 lib_cv = { path = "../lib_cv" }
 log = { workspace = true }
 env_logger = { workspace = true }
+eframe = { workspace = true }
+serde = { workspace = true }
+rfd = { workspace = true }
+video-rs = { workspace = true }
