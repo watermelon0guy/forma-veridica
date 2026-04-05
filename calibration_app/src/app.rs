@@ -1,16 +1,25 @@
 use std::path::PathBuf;
 
+use calib_targets::charuco::CharucoBoard;
 use eframe::{
     App,
-    egui::{Context, TextureHandle},
+    egui::{Context, TextureHandle, TextureOptions},
 };
+use vision_calibration::core::{NoMeta, RigView};
 
-use crate::{ui::render_content, video::VideoPlayer};
+use crate::{
+    ui::render_content,
+    video::{VideoPlayer, dynamic_image_to_color_image},
+};
 
 pub(crate) struct CalibrationApp {
     pub(crate) video_paths: Vec<PathBuf>,
     pub(crate) state: CalibrationStep,
     pub(crate) video_players: Vec<VideoPlayer>,
+    pub(crate) texture_handles: Vec<TextureHandle>,
+    pub(crate) offset_in_seconds: Vec<f64>,
+    pub(crate) _rigs: Vec<RigView<NoMeta>>,
+    pub(crate) _charuco_board: Option<CharucoBoard>,
 }
 
 pub(crate) enum CalibrationStep {
@@ -25,6 +34,10 @@ impl Default for CalibrationApp {
             video_paths: Vec::new(),
             state: CalibrationStep::PickVideos,
             video_players: Vec::new(),
+            offset_in_seconds: Vec::new(),
+            _rigs: Vec::new(),
+            texture_handles: Vec::new(),
+            _charuco_board: None,
         }
     }
 }
@@ -42,15 +55,31 @@ impl CalibrationApp {
         let mut players = Vec::new();
 
         for path in &self.video_paths {
-            match VideoPlayer::new(ctx, path) {
+            match VideoPlayer::new(path) {
                 Ok(vp) => players.push(vp),
                 Err(e) => return Err(format!("Проблема при создании плеера: {e}").into()),
             }
         }
 
         self.video_players = players;
+
+        self.texture_handles = self
+            .video_players
+            .iter()
+            .enumerate()
+            .map(|(i, vp)| {
+                ctx.load_texture(
+                    format!("video_frame_{i}"),
+                    dynamic_image_to_color_image(vp.color_image()),
+                    TextureOptions::default(),
+                )
+            })
+            .collect();
+
         Ok(())
     }
+
+    pub(crate) fn _perform_calibration() {}
 }
 
 impl App for CalibrationApp {

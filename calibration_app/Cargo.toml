@@ -11,3 +11,6 @@ eframe = { workspace = true }
 serde = { workspace = true }
 rfd = { workspace = true }
 video-rs = { workspace = true }
+vision-calibration = { workspace = true }
+calib-targets = { workspace = true }
+image = { workspace = true }

@@ -36,10 +36,10 @@ pub fn calibrate_with_charuco(
     }
 
     let dataset = PlanarDataset::new(views)?;
-    session.set_input(dataset);
+    let _ = session.set_input(dataset);
 
     let filter_option = FilterOptions::default();
-    run_calibration_with_filtering(&mut session, filter_option);
+    let _ = run_calibration_with_filtering(&mut session, filter_option);
 
     let intrinsics = session.export()?;
 
@@ -84,7 +84,7 @@ fn correspondence_view_from_charuco(
     };
 }
 
-pub fn calibrate_multiple_with_charuco(
+pub fn calibrate_multiple_with_charuco_from_images(
     imgs_sets: &Vec<Vec<GrayImage>>,
     charuco_board: &CharucoBoard,
 ) -> Result<RigExtrinsicsExport, Box<dyn std::error::Error>> {
@@ -120,6 +120,67 @@ pub fn calibrate_multiple_with_charuco(
         };
 
         rigs.push(rig_view);
+    }
+
+    let rig_dataset = RigExtrinsicsDataset::new(rigs, num_cameras)?;
+
+    let mut session = CalibrationSession::<RigExtrinsicsProblem>::new();
+    session.set_input(rig_dataset)?;
+    run_rig_extrinsics(&mut session)?;
+    let result = session.export()?;
+
+    Ok(result)
+}
+
+pub fn update_rigs(
+    rigs: &mut Vec<RigView<NoMeta>>,
+    cams_imgs: Vec<GrayImage>,
+    charuco_board: &CharucoBoard,
+) {
+    let mut correspondences = Vec::new();
+    let num_cameras = cams_imgs.len();
+    for cam_idx in 0..num_cameras {
+        correspondences.push(correspondence_view_from_charuco(
+            charuco_board,
+            &cams_imgs[cam_idx],
+        ));
+    }
+
+    let rig_view = RigView {
+        obs: RigViewObs {
+            cameras: correspondences,
+        },
+        meta: NoMeta,
+    };
+
+    rigs.push(rig_view);
+}
+
+pub fn calibrate_multiple_with_charuco_from_rigs(
+    rigs: Vec<RigView<NoMeta>>,
+) -> Result<RigExtrinsicsExport, Box<dyn std::error::Error>> {
+    debug!("Start multiple cameras calibration");
+    let num_cameras = match rigs.get(0) {
+        Some(it) => it,
+        None => return Err("Ошибка получения количества камер из наборов изображений".into()),
+    }
+    .obs
+    .cameras
+    .len();
+
+    let num_frames = rigs.len();
+    debug!(
+        "Количество камер изображений для калибровки: {}.",
+        num_cameras
+    );
+    debug!(
+        "Количество наборов изображений для калибровки: {}.",
+        num_frames
+    );
+
+    if num_cameras < 2 {
+        error!("Ошибка: для калибровки требуется как минимум 2 набора изображений.");
+        return Err("Недостаточно камер".into());
     }
 
     let rig_dataset = RigExtrinsicsDataset::new(rigs, num_cameras)?;

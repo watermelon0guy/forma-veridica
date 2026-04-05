@@ -1,15 +1,14 @@
 use std::path::PathBuf;
 
 use eframe::egui::{
-    Align, CentralPanel, Context, Frame, Grid, Image, Layout, RichText, Slider, Style, Ui, Vec2,
-    vec2,
+    Align, CentralPanel, Context, Frame, Grid, Image, Layout, RichText, Slider, Style,
+    TextureHandle, Ui, Vec2, vec2,
 };
 use log::error;
-use video_rs::Time;
 
 use crate::{
     app::{CalibrationApp, CalibrationStep},
-    video::VideoPlayer,
+    video::{VideoPlayer, set_color_image_to_texture_handle},
 };
 
 const PADDING: f32 = 10.0;
@@ -36,6 +35,17 @@ fn align_video_screen(app: &mut CalibrationApp, ctx: &Context, ui: &mut Ui) {
     }
     let total = app.video_players.len();
 
+    for (i, vp) in app.video_players.iter().enumerate() {
+        // let img = vp.color_image().;
+        // let det_res = match app.charuco_board {
+        //     Some(board) => get_charuco(&board),
+        //     None => todo!(),
+        // };
+        // draw_charuco_detection(vp.color_image(), result)
+
+        set_color_image_to_texture_handle(vp.color_image(), &mut app.texture_handles[i]);
+    }
+
     Frame::NONE.show(ui, |ui| {
         let num_columns = ((total as f32).sqrt().ceil() as usize).min(total);
         let num_rows = (total + num_columns - 1) / num_columns;
@@ -50,44 +60,56 @@ fn align_video_screen(app: &mut CalibrationApp, ctx: &Context, ui: &mut Ui) {
             .max_col_width(cell_width)
             .show(ui, |ui| {
                 for (i, player) in app.video_players.iter_mut().enumerate() {
-                    render_video_card(player, ctx, ui, cell_size);
+                    render_video_card(player, &app.texture_handles[i], ui, cell_size);
                     if (i + 1) % num_columns == 0 && i + 1 < total {
                         ui.end_row();
                     }
                 }
             });
     });
+    if ui.button("Начать калибровку").clicked() {
+        app.offset_in_seconds = app
+            .video_players
+            .iter()
+            .map(|vid| vid.current_time_in_seconds)
+            .collect();
+
+        app.state = CalibrationStep::Calibration;
+    }
 }
 
-fn render_video_card(video_player: &mut VideoPlayer, ctx: &Context, ui: &mut Ui, cell_size: Vec2) {
+fn render_video_card(
+    video_player: &mut VideoPlayer,
+    texture_handle: &TextureHandle,
+    ui: &mut Ui,
+    cell_size: Vec2,
+) {
     ui.allocate_ui_with_layout(cell_size, Layout::top_down_justified(Align::Center), |ui| {
         Frame::group(ui.style())
             .outer_margin(0.0)
             .inner_margin(PADDING)
             .show(ui, |ui| {
                 ui.vertical_centered(|ui| {
-                    if let Some(texture) = video_player.texture() {
-                        ui.add(Image::new(texture).shrink_to_fit());
-                    }
+                    ui.add(Image::new(texture_handle).shrink_to_fit());
                 });
                 ui.horizontal(|ui| {
                     if ui.button("<<").clicked() {
-                        if let Err(e) = video_player.rewind_backward(ctx, 10) {
+                        if let Err(e) = video_player.rewind_backward(10) {
                             error!("Ошибка при перемотке назад: {e}");
                         }
                     }
                     if ui.button("<").clicked() {
-                        if let Err(e) = video_player.rewind_backward(ctx, 1) {
+                        if let Err(e) = video_player.rewind_backward(1) {
                             error!("Ошибка при перемотке назад: {e}");
                         }
                     }
                     if ui.button(">").clicked() {
-                        if let Err(e) = video_player.rewind_forward(ctx, 1) {
+                        if let Err(e) = video_player.rewind_forward(1) {
                             error!("Ошибка при перемотке вперед: {e}");
                         }
                     }
                     if ui.button(">>").clicked() {
-                        if let Err(e) = video_player.rewind_forward(ctx, 10) {
+                        if let Err(e) = video_player.rewind_forward(10) {
                             error!("Ошибка при перемотке вперед: {e}");
                         }
                     }
@@ -109,7 +131,7 @@ fn render_video_card(video_player: &mut VideoPlayer, ctx: &Context, ui: &mut Ui,
                                 video_player.current_time_in_seconds,
                             );
                             if let Err(e) =
-                                video_player.seek_to_time(ctx, video_player.current_time_in_seconds)
+                                video_player.seek_to_time(video_player.current_time_in_seconds)
                             {
                                 error!("Ошибка при поиске по времени: {e}");
                             }
