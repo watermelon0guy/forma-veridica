@@ -1,10 +1,15 @@
 use std::path::PathBuf;
 
-use calib_targets::charuco::CharucoBoard;
+use calib_targets::{
+    aruco::builtins::DICT_4X4_100,
+    charuco::CharucoBoard,
+    printable::{CharucoTargetSpec, PrintableTargetDocument, render_target_bundle},
+};
 use eframe::{
     App,
     egui::{Context, TextureHandle, TextureOptions},
 };
+use image::load_from_memory;
 use vision_calibration::core::{NoMeta, RigView};
 
 use crate::{
@@ -19,7 +24,8 @@ pub(crate) struct CalibrationApp {
     pub(crate) video_texture_handles: Vec<TextureHandle>,
     pub(crate) offset_in_seconds: Vec<f64>,
     pub(crate) _rigs: Vec<RigView<NoMeta>>,
-    pub(crate) charuco_board: Option<CharucoBoard>,
+    pub(crate) charuco_target_spec: CharucoTargetSpec,
+    pub(crate) charuco_board: CharucoBoard,
     pub(crate) charuco_board_texture_handle: Option<TextureHandle>,
 }
 
@@ -32,15 +38,28 @@ pub(crate) enum CalibrationStep {
 
 impl Default for CalibrationApp {
     fn default() -> Self {
+        let charuco_target_spec = CharucoTargetSpec {
+            rows: 9,
+            cols: 9,
+            square_size_mm: 20.0,
+            marker_size_rel: 0.7,
+            dictionary: DICT_4X4_100,
+            marker_layout: calib_targets::charuco::MarkerLayout::OpenCvCharuco,
+            border_bits: 3,
+        };
+        let charuco_board = CharucoBoard::new(charuco_target_spec.to_board_spec())
+            .expect("Неправильные даненые по умолчанию для Charuco");
+
         Self {
             video_paths: Vec::new(),
-            state: CalibrationStep::PickVideos,
+            state: CalibrationStep::SetupCharucoBoard,
             video_players: Vec::new(),
             offset_in_seconds: Vec::new(),
             _rigs: Vec::new(),
             video_texture_handles: Vec::new(),
-            charuco_board: None,
+            charuco_board,
             charuco_board_texture_handle: None,
+            charuco_target_spec,
         }
     }
 }
@@ -89,4 +108,17 @@ impl App for CalibrationApp {
     fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
         render_content(self, ctx);
     }
+}
+
+pub(crate) fn charuco_target_spec_to_dynamic_image(
+    charuco_target_spec: &CharucoTargetSpec,
+) -> Result<image::DynamicImage, Box<dyn std::error::Error>> {
+    // Создаём документ для печати (размеры в мм)
+    let mut document =
+        PrintableTargetDocument::from_charuco_board_spec_mm(&charuco_target_spec.to_board_spec());
+    document.render.png_dpi = 30;
+
+    // Рендерим - получаем PNG байты, SVG и JSON
+    let bundle = render_target_bundle(&document)?;
+    Ok(load_from_memory(&bundle.png_bytes)?)
 }

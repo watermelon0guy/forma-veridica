@@ -1,14 +1,15 @@
-use std::path::PathBuf;
+use std::{ops::RangeInclusive, path::PathBuf};
 
+use calib_targets::aruco::builtins::{BUILTIN_DICTIONARY_NAMES, builtin_dictionary};
 use eframe::egui::{
-    Align, CentralPanel, Context, Frame, Grid, Image, Layout, RichText, Slider, Style,
-    TextureHandle, Ui, Vec2, vec2,
+    Align, CentralPanel, ComboBox, Context, Frame, Grid, Image, Layout, RichText, SidePanel,
+    Slider, SliderClamping, Style, TextureHandle, TextureOptions, Ui, Vec2, vec2,
 };
 use log::error;
 
 use crate::{
-    app::{CalibrationApp, CalibrationStep},
-    video::{VideoPlayer, set_color_image_to_texture_handle},
+    app::{CalibrationApp, CalibrationStep, charuco_target_spec_to_dynamic_image},
+    video::{VideoPlayer, dynamic_image_to_color_image, set_color_image_to_texture_handle},
 };
 
 const PADDING: f32 = 10.0;
@@ -25,7 +26,91 @@ pub(crate) fn render_content(app: &mut CalibrationApp, ctx: &Context) {
         });
 }
 
-fn charuco_board_screen(app: &mut CalibrationApp, ctx: &Context, ui: &mut Ui) {}
+fn charuco_board_screen(app: &mut CalibrationApp, ctx: &Context, ui: &mut Ui) {
+    let dict_len = app.charuco_target_spec.dictionary.codes.len() as u32;
+    SidePanel::left("parameters").show(ctx, |ui| {
+        ui.add(
+            Slider::new(
+                &mut app.charuco_target_spec.cols,
+                RangeInclusive::new(1, dict_len * 2 / app.charuco_target_spec.rows),
+            )
+            .update_while_editing(false)
+            .text("Длина")
+            .clamping(SliderClamping::Always),
+        );
+        ui.add(
+            Slider::new(
+                &mut app.charuco_target_spec.rows,
+                RangeInclusive::new(1, dict_len * 2 / app.charuco_target_spec.cols),
+            )
+            .update_while_editing(false)
+            .text("Ширина")
+            .clamping(SliderClamping::Always),
+        );
+        ui.add(
+            Slider::new(
+                &mut app.charuco_target_spec.marker_size_rel,
+                RangeInclusive::new(0.01, 0.99),
+            )
+            .update_while_editing(false)
+            .text("Размер маркера")
+            .clamping(SliderClamping::Always),
+        );
+        ui.add(
+            Slider::new(
+                &mut app.charuco_target_spec.square_size_mm,
+                RangeInclusive::new(10.0, 100.0),
+            )
+            .update_while_editing(false)
+            .text("Размер квадрата")
+            .clamping(SliderClamping::Always),
+        );
+        ComboBox::from_label("Наборы маркеров")
+            .selected_text(app.charuco_target_spec.dictionary.name)
+            .show_ui(ui, |ui| {
+                for d in BUILTIN_DICTIONARY_NAMES {
+                    let dict_name = d.to_string();
+                    if ui
+                        .selectable_label(
+                            app.charuco_target_spec.dictionary.name == dict_name,
+                            &dict_name,
+                        )
+                        .clicked()
+                    {
+                        if let Some(new_dict) = builtin_dictionary(d) {
+                            app.charuco_target_spec.dictionary = new_dict;
+                        }
+                    }
+                }
+            });
+        if ui.button("Сохранить паттерн").clicked() {
+            // let _ = self.save_pattern();
+        }
+    });
+
+    eframe::egui::CentralPanel::default().show(ctx, |ui| {
+        match &mut app.charuco_board_texture_handle {
+            Some(texture) => {
+                let image = charuco_target_spec_to_dynamic_image(&app.charuco_target_spec)
+                    .expect("Ошибка конвертации CharucoBoard в DynamicImage");
+                set_color_image_to_texture_handle(&image, texture);
+                let texture_ref = &*texture;
+                ui.centered_and_justified(|ui| {
+                    ui.add(eframe::egui::Image::from_texture(texture_ref).shrink_to_fit())
+                });
+            }
+            None => {
+                let image = charuco_target_spec_to_dynamic_image(&app.charuco_target_spec)
+                    .expect("Ошибка конвертации CharucoBoard в DynamicImage");
+                app.charuco_board_texture_handle = Some(ctx.load_texture(
+                    "charuco_board",
+                    dynamic_image_to_color_image(&image),
+                    TextureOptions::default(),
+                ));
+            }
+        }
+    });
+}
 
 fn align_video_screen(app: &mut CalibrationApp, ctx: &Context, ui: &mut Ui) {
     if let Err(e) = app.init_videos(ctx) {
