@@ -16,13 +16,15 @@ pub(crate) struct CalibrationApp {
     pub(crate) video_paths: Vec<PathBuf>,
     pub(crate) state: CalibrationStep,
     pub(crate) video_players: Vec<VideoPlayer>,
-    pub(crate) texture_handles: Vec<TextureHandle>,
+    pub(crate) video_texture_handles: Vec<TextureHandle>,
     pub(crate) offset_in_seconds: Vec<f64>,
     pub(crate) _rigs: Vec<RigView<NoMeta>>,
-    pub(crate) _charuco_board: Option<CharucoBoard>,
+    pub(crate) charuco_board: Option<CharucoBoard>,
+    pub(crate) charuco_board_texture_handle: Option<TextureHandle>,
 }
 
 pub(crate) enum CalibrationStep {
+    SetupCharucoBoard,
     PickVideos,
     AlignVideos,
     Calibration,
@@ -36,8 +38,9 @@ impl Default for CalibrationApp {
             video_players: Vec::new(),
             offset_in_seconds: Vec::new(),
             _rigs: Vec::new(),
-            texture_handles: Vec::new(),
-            _charuco_board: None,
+            video_texture_handles: Vec::new(),
+            charuco_board: None,
+            charuco_board_texture_handle: None,
         }
     }
 }
@@ -63,7 +66,7 @@ impl CalibrationApp {
 
         self.video_players = players;
 
-        self.texture_handles = self
+        self.video_texture_handles = self
             .video_players
             .iter()
             .enumerate()

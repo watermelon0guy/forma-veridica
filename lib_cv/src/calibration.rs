@@ -1,5 +1,5 @@
 use calib_targets::{
-    charuco::{CharucoBoard, CharucoDetectionResult, CharucoDetectorParams},
+    charuco::{CharucoBoard, CharucoDetectionResult, CharucoParams},
     detect::{self},
 };
 use image::GrayImage;
@@ -18,8 +18,8 @@ pub fn get_charuco(
     charuco_board: &CharucoBoard,
     img: &GrayImage,
 ) -> Result<CharucoDetectionResult, Box<dyn std::error::Error>> {
-    let detector_params = CharucoDetectorParams::for_board(&charuco_board.spec());
-    let charuco_detection_result = detect::detect_charuco_default(img, detector_params)?;
+    let detector_params = CharucoParams::for_board(&charuco_board.spec());
+    let charuco_detection_result = detect::detect_charuco(img, &detector_params)?;
     Ok(charuco_detection_result)
 }
 

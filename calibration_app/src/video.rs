@@ -2,7 +2,7 @@ use std::path::Path;
 
 use eframe::egui::{ColorImage, TextureHandle, TextureOptions};
 use image::DynamicImage;
-use video_rs::{Frame, Time, decode::Decoder};
+use video_rs::{Decoder, Time, frame::Frame};
 
 pub(crate) struct VideoPlayer {
     decoder: Decoder,

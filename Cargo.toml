@@ -1,9 +1,9 @@
 [workspace]
 members = [
     "calibration_app",
-    "generate_calibration_pattern",
-    "lib_cv",
-    "reconstruction_app",
+    # "generate_calibration_pattern",
+    "lib_cv"
+    # "reconstruction_app",
 ]
 resolver = "2"
 
@@ -15,10 +15,11 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_yml = "0.0.12"
 rfd = "0.17.2"
 image = "0.25.9"
-video-rs = "0.11.0"
-calib-targets = "0.2.4"
+video-rs = { version = "0.11.0", features = ["ndarray"] }
+calib-targets = "0.5.2"
 vision-calibration="0.1.4"
 sift-wgpu="0.1.0"
 kiddo = "5.2.4"
 nalgebra = { version = "0.34.1", features = ["serde-serialize"] }
 ndarray = "0.17.2"
+imageproc = "0.26.1"

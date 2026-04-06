@@ -1,6 +1,9 @@
 use calib_targets::charuco::CharucoDetectionResult;
 use image::{DynamicImage, GenericImageView, Rgba};
-use imageproc::drawing::{draw_cross_mut, draw_polygon_mut};
+use imageproc::{
+    drawing::{draw_cross_mut, draw_polygon_mut},
+    point::Point,
+};
 
 pub fn split_image_into_quadrants(
     img: &DynamicImage,
@@ -40,7 +43,7 @@ pub fn draw_charuco_detection(
         if let Some(corners) = marker.corners_img {
             let points: Vec<_> = corners
                 .iter()
-                .map(|p| imageproc::point::Point::new(p.x as i32, p.y as i32))
+                .map(|p| Point::new(p.x as i32, p.y as i32))
                 .collect();
             draw_polygon_mut(&mut img, &points, Rgba([255, 0, 0, 255]));
         }

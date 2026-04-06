@@ -18,11 +18,14 @@ pub(crate) fn render_content(app: &mut CalibrationApp, ctx: &Context) {
         // .frame(Frame::NONE)
         .frame(Frame::central_panel(&Style::default()))
         .show(ctx, |ui| match app.state {
+            CalibrationStep::SetupCharucoBoard => charuco_board_screen(app, ctx, ui),
             CalibrationStep::PickVideos => pick_videos_screen(app, ctx, ui),
             CalibrationStep::AlignVideos => align_video_screen(app, ctx, ui),
             CalibrationStep::Calibration => todo!(),
         });
 }
+
+fn charuco_board_screen(app: &mut CalibrationApp, ctx: &Context, ui: &mut Ui) {}
 
 fn align_video_screen(app: &mut CalibrationApp, ctx: &Context, ui: &mut Ui) {
     if let Err(e) = app.init_videos(ctx) {
@@ -43,7 +46,7 @@ fn align_video_screen(app: &mut CalibrationApp, ctx: &Context, ui: &mut Ui) {
         // };
         // draw_charuco_detection(vp.color_image(), result)
 
-        set_color_image_to_texture_handle(vp.color_image(), &mut app.texture_handles[i]);
+        set_color_image_to_texture_handle(vp.color_image(), &mut app.video_texture_handles[i]);
     }
 
     Frame::NONE.show(ui, |ui| {
@@ -60,7 +63,7 @@ fn align_video_screen(app: &mut CalibrationApp, ctx: &Context, ui: &mut Ui) {
             .max_col_width(cell_width)
             .show(ui, |ui| {
                 for (i, player) in app.video_players.iter_mut().enumerate() {
-                    render_video_card(player, &app.texture_handles[i], ui, cell_size);
+                    render_video_card(player, &app.video_texture_handles[i], ui, cell_size);
                     if (i + 1) % num_columns == 0 && i + 1 < total {
                         ui.end_row();
                     }

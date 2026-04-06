@@ -14,3 +14,4 @@ sift-wgpu = { workspace = true }
 kiddo = { workspace = true }
 nalgebra = { workspace = true }
 ndarray = { workspace = true }
+imageproc = { workspace = true }
