@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use calib_targets::{
     aruco::builtins::DICT_4X4_100,
     charuco::CharucoBoard,
-    printable::{CharucoTargetSpec, PrintableTargetDocument, render_target_bundle},
+    printable::{CharucoTargetSpec, PageSpec, PrintableTargetDocument, render_target_bundle},
 };
 use eframe::{
     App,
@@ -39,8 +39,8 @@ pub(crate) enum CalibrationStep {
 impl Default for CalibrationApp {
     fn default() -> Self {
         let charuco_target_spec = CharucoTargetSpec {
-            rows: 9,
-            cols: 9,
+            rows: 10,
+            cols: 10,
             square_size_mm: 20.0,
             marker_size_rel: 0.7,
             dictionary: DICT_4X4_100,
@@ -112,12 +112,14 @@ impl App for CalibrationApp {
 
 pub(crate) fn charuco_target_spec_to_dynamic_image(
     charuco_target_spec: &CharucoTargetSpec,
+    dpi: u32,
+    page_spec: PageSpec,
 ) -> Result<image::DynamicImage, Box<dyn std::error::Error>> {
     // Создаём документ для печати (размеры в мм)
     let mut document =
         PrintableTargetDocument::from_charuco_board_spec_mm(&charuco_target_spec.to_board_spec());
-    document.render.png_dpi = 30;
-
+    document.render.png_dpi = dpi;
+    document.page = page_spec;
     // Рендерим - получаем PNG байты, SVG и JSON
     let bundle = render_target_bundle(&document)?;
     Ok(load_from_memory(&bundle.png_bytes)?)

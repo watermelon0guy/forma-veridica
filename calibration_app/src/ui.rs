@@ -1,10 +1,14 @@
 use std::{ops::RangeInclusive, path::PathBuf};
 
-use calib_targets::aruco::builtins::{BUILTIN_DICTIONARY_NAMES, builtin_dictionary};
+use calib_targets::{
+    aruco::builtins::{BUILTIN_DICTIONARY_NAMES, builtin_dictionary},
+    printable::{PageOrientation, PageSize, PageSpec},
+};
 use eframe::egui::{
     Align, CentralPanel, ComboBox, Context, Frame, Grid, Image, Layout, RichText, SidePanel,
     Slider, SliderClamping, Style, TextureHandle, TextureOptions, Ui, Vec2, vec2,
 };
+use image::DynamicImage;
 use log::error;
 
 use crate::{
@@ -83,16 +87,40 @@ fn charuco_board_screen(app: &mut CalibrationApp, ctx: &Context, ui: &mut Ui) {
                     }
                 }
             });
+        ui.add(
+            Slider::new(
+                &mut app.charuco_target_spec.cols,
+                RangeInclusive::new(1, dict_len * 2 / app.charuco_target_spec.rows),
+            )
+            .update_while_editing(false)
+            .text("Длина листа")
+            .clamping(SliderClamping::Always),
+        );
         if ui.button("Сохранить паттерн").clicked() {
             // let _ = self.save_pattern();
         }
     });
 
+    let page_margin_mm = 10.0;
+    let page_size = PageSize::Custom {
+        width_mm: app.charuco_target_spec.square_size_mm * app.charuco_target_spec.cols as f64
+            + page_margin_mm * 2.0,
+        height_mm: app.charuco_target_spec.square_size_mm * app.charuco_target_spec.rows as f64
+            + page_margin_mm * 2.0,
+    };
+
+    let page_spec = PageSpec {
+        size: page_size,
+        orientation: PageOrientation::Portrait,
+        margin_mm: page_margin_mm,
+    };
+
     eframe::egui::CentralPanel::default().show(ctx, |ui| {
         match &mut app.charuco_board_texture_handle {
             Some(texture) => {
-                let image = charuco_target_spec_to_dynamic_image(&app.charuco_target_spec)
-                    .expect("Ошибка конвертации CharucoBoard в DynamicImage");
+                let image =
+                    charuco_target_spec_to_dynamic_image(&app.charuco_target_spec, 30, page_spec)
+                        .unwrap_or(DynamicImage::default());
                 set_color_image_to_texture_handle(&image, texture);
                 let texture_ref = &*texture;
                 ui.centered_and_justified(|ui| {
@@ -100,8 +128,9 @@ fn charuco_board_screen(app: &mut CalibrationApp, ctx: &Context, ui: &mut Ui) {
                 });
             }
             None => {
-                let image = charuco_target_spec_to_dynamic_image(&app.charuco_target_spec)
-                    .expect("Ошибка конвертации CharucoBoard в DynamicImage");
+                let image =
+                    charuco_target_spec_to_dynamic_image(&app.charuco_target_spec, 10, page_spec)
+                        .unwrap_or(DynamicImage::default());
                 app.charuco_board_texture_handle = Some(ctx.load_texture(
                     "charuco_board",
                     dynamic_image_to_color_image(&image),
