@@ -25,10 +25,7 @@ pub fn split_image_into_quadrants(
     ])
 }
 
-pub fn draw_charuco_detection(
-    img: &mut DynamicImage,
-    result: &CharucoDetectionResult,
-) -> DynamicImage {
+pub fn draw_charuco_detection(img: &DynamicImage, result: &CharucoDetectionResult) -> DynamicImage {
     let mut img = img.to_rgba8();
 
     // Рисуем углы Charuco зелёным крестиком

@@ -5,8 +5,8 @@ mod video;
 
 fn main() -> eframe::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn"))
-        .filter_module("calibration_app", log::LevelFilter::Info)
-        .filter_module("lib_cv", log::LevelFilter::Info)
+        .filter_module("calibration_app", log::LevelFilter::Debug)
+        .filter_module("lib_cv", log::LevelFilter::Debug)
         .init();
 
     if let Err(e) = video_rs::init() {

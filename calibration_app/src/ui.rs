@@ -6,28 +6,28 @@ use calib_targets::{
 };
 use eframe::egui::{
     Align, CentralPanel, ComboBox, Context, Frame, Grid, Image, Layout, RichText, SidePanel,
-    Slider, SliderClamping, Style, TextureHandle, TextureOptions, Ui, Vec2, vec2,
+    Slider, SliderClamping, TextureHandle, TextureOptions, Ui, Vec2, vec2,
 };
 use image::DynamicImage;
-use log::error;
+use lib_cv::{calibration::get_charuco, utils::draw_charuco_detection};
+use log::{error, warn};
 
 use crate::{
-    app::{CalibrationApp, CalibrationStep, charuco_target_spec_to_dynamic_image},
+    app::{
+        CalibrationApp, CalibrationStep, FrameWithCharucoData, charuco_target_spec_to_dynamic_image,
+    },
     video::{VideoPlayer, dynamic_image_to_color_image, set_color_image_to_texture_handle},
 };
 
 const PADDING: f32 = 10.0;
 
 pub(crate) fn render_content(app: &mut CalibrationApp, ctx: &Context) {
-    CentralPanel::default()
-        // .frame(Frame::NONE)
-        .frame(Frame::central_panel(&Style::default()))
-        .show(ctx, |ui| match app.state {
-            CalibrationStep::SetupCharucoBoard => charuco_board_screen(app, ctx, ui),
-            CalibrationStep::PickVideos => pick_videos_screen(app, ctx, ui),
-            CalibrationStep::AlignVideos => align_video_screen(app, ctx, ui),
-            CalibrationStep::Calibration => todo!(),
-        });
+    CentralPanel::default().show(ctx, |ui| match app.state {
+        CalibrationStep::SetupCharucoBoard => charuco_board_screen(app, ctx, ui),
+        CalibrationStep::PickVideos => pick_videos_screen(app, ctx, ui),
+        CalibrationStep::AlignVideos => align_video_screen(app, ctx, ui),
+        CalibrationStep::Calibration => todo!(),
+    });
 }
 
 fn charuco_board_screen(app: &mut CalibrationApp, ctx: &Context, ui: &mut Ui) {
@@ -39,7 +39,7 @@ fn charuco_board_screen(app: &mut CalibrationApp, ctx: &Context, ui: &mut Ui) {
                 RangeInclusive::new(1, dict_len * 2 / app.charuco_target_spec.rows),
             )
             .update_while_editing(false)
-            .text("Длина")
+            .text("Столбцы")
             .clamping(SliderClamping::Always),
         );
         ui.add(
@@ -48,7 +48,7 @@ fn charuco_board_screen(app: &mut CalibrationApp, ctx: &Context, ui: &mut Ui) {
                 RangeInclusive::new(1, dict_len * 2 / app.charuco_target_spec.cols),
             )
             .update_while_editing(false)
-            .text("Ширина")
+            .text("Строчки")
             .clamping(SliderClamping::Always),
         );
         ui.add(
@@ -87,17 +87,18 @@ fn charuco_board_screen(app: &mut CalibrationApp, ctx: &Context, ui: &mut Ui) {
                     }
                 }
             });
-        ui.add(
-            Slider::new(
-                &mut app.charuco_target_spec.cols,
-                RangeInclusive::new(1, dict_len * 2 / app.charuco_target_spec.rows),
-            )
-            .update_while_editing(false)
-            .text("Длина листа")
-            .clamping(SliderClamping::Always),
-        );
+
         if ui.button("Сохранить паттерн").clicked() {
-            // let _ = self.save_pattern();
+            if let Ok(()) = app.update_board_from_spec() {
+                app.state = CalibrationStep::PickVideos;
+                log::debug!(
+                    "CharucoBoard: rows={}, cols={}, dict_name={}, marker_size_rel={}",
+                    app.charuco_target_spec.rows,
+                    app.charuco_target_spec.cols,
+                    app.charuco_target_spec.dictionary.name,
+                    app.charuco_target_spec.marker_size_rel
+                );
+            }
         }
     });
 
@@ -119,7 +120,7 @@ fn charuco_board_screen(app: &mut CalibrationApp, ctx: &Context, ui: &mut Ui) {
         match &mut app.charuco_board_texture_handle {
             Some(texture) => {
                 let image =
-                    charuco_target_spec_to_dynamic_image(&app.charuco_target_spec, 30, page_spec)
+                    charuco_target_spec_to_dynamic_image(&app.charuco_target_spec, 60, page_spec)
                         .unwrap_or(DynamicImage::default());
                 set_color_image_to_texture_handle(&image, texture);
                 let texture_ref = &*texture;
@@ -129,7 +130,7 @@ fn charuco_board_screen(app: &mut CalibrationApp, ctx: &Context, ui: &mut Ui) {
             }
             None => {
                 let image =
-                    charuco_target_spec_to_dynamic_image(&app.charuco_target_spec, 10, page_spec)
+                    charuco_target_spec_to_dynamic_image(&app.charuco_target_spec, 60, page_spec)
                         .unwrap_or(DynamicImage::default());
                 app.charuco_board_texture_handle = Some(ctx.load_texture(
                     "charuco_board",
@@ -153,14 +154,65 @@ fn align_video_screen(app: &mut CalibrationApp, ctx: &Context, ui: &mut Ui) {
     let total = app.video_players.len();
 
     for (i, vp) in app.video_players.iter().enumerate() {
-        // let img = vp.color_image().;
-        // let det_res = match app.charuco_board {
-        //     Some(board) => get_charuco(&board),
-        //     None => todo!(),
-        // };
-        // draw_charuco_detection(vp.color_image(), result)
+        let should_detect: bool = match &app.last_detected_frame_with_charuco[i] {
+            Some(cached) if cached.frame == vp.current_frame() => match &cached.charuco_data {
+                Some(detection_res) => {
+                    let img_with_charuco =
+                        draw_charuco_detection(vp.dynamic_image(), &detection_res);
+                    set_color_image_to_texture_handle(
+                        &img_with_charuco,
+                        &mut app.video_texture_handles[i],
+                    );
+                    continue;
+                }
+                None => {
+                    set_color_image_to_texture_handle(
+                        vp.dynamic_image(),
+                        &mut app.video_texture_handles[i],
+                    );
+                    continue;
+                }
+            },
+            _ => true,
+        };
 
-        set_color_image_to_texture_handle(vp.color_image(), &mut app.video_texture_handles[i]);
+        if should_detect {
+            let grey_img = vp.dynamic_image().to_luma8();
+            let detection_result = get_charuco(&app.charuco_board, &grey_img);
+
+            log::debug!(
+                "Видео {}: размер кадра {}x{}, grey {}x{}, aspect_ratio={:.2}",
+                i,
+                vp.dynamic_image().width(),
+                vp.dynamic_image().height(),
+                vp.dynamic_image().width(),
+                vp.dynamic_image().height(),
+                vp.dynamic_image().width() as f32 / vp.dynamic_image().height() as f32
+            );
+
+            match &detection_result {
+                Some(detection_res) => {
+                    let img_with_charuco =
+                        draw_charuco_detection(vp.dynamic_image(), &detection_res);
+                    set_color_image_to_texture_handle(
+                        &img_with_charuco,
+                        &mut app.video_texture_handles[i],
+                    );
+                }
+                None => {
+                    set_color_image_to_texture_handle(
+                        vp.dynamic_image(),
+                        &mut app.video_texture_handles[i],
+                    );
+                    warn!("Ошибка при обнаружении Charuco в видео {}", i);
+                }
+            }
+
+            app.last_detected_frame_with_charuco[i] = Some(FrameWithCharucoData {
+                frame: vp.current_frame(),
+                charuco_data: detection_result,
+            });
+        }
     }
 
     Frame::NONE.show(ui, |ui| {

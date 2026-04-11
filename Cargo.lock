@@ -3049,6 +3049,7 @@ dependencies = [
  "log",
  "nalgebra 0.34.2",
  "ndarray 0.17.2",
+ "rayon",
  "sift-wgpu",
  "video-rs",
  "vision-calibration",

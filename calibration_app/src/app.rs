@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use calib_targets::{
-    aruco::builtins::DICT_4X4_100,
-    charuco::CharucoBoard,
+    aruco::builtins::{DICT_4X4_100, DICT_6X6_100},
+    charuco::{CharucoBoard, CharucoDetectionResult},
     printable::{CharucoTargetSpec, PageSpec, PrintableTargetDocument, render_target_bundle},
 };
 use eframe::{
@@ -27,6 +27,12 @@ pub(crate) struct CalibrationApp {
     pub(crate) charuco_target_spec: CharucoTargetSpec,
     pub(crate) charuco_board: CharucoBoard,
     pub(crate) charuco_board_texture_handle: Option<TextureHandle>,
+    pub(crate) last_detected_frame_with_charuco: Vec<Option<FrameWithCharucoData>>,
+}
+
+pub(crate) struct FrameWithCharucoData {
+    pub(crate) frame: u64,
+    pub(crate) charuco_data: Option<CharucoDetectionResult>,
 }
 
 pub(crate) enum CalibrationStep {
@@ -39,11 +45,11 @@ pub(crate) enum CalibrationStep {
 impl Default for CalibrationApp {
     fn default() -> Self {
         let charuco_target_spec = CharucoTargetSpec {
-            rows: 10,
-            cols: 10,
+            rows: 11,
+            cols: 8,
             square_size_mm: 20.0,
-            marker_size_rel: 0.7,
-            dictionary: DICT_4X4_100,
+            marker_size_rel: 0.55,
+            dictionary: DICT_6X6_100,
             marker_layout: calib_targets::charuco::MarkerLayout::OpenCvCharuco,
             border_bits: 3,
         };
@@ -60,6 +66,7 @@ impl Default for CalibrationApp {
             charuco_board,
             charuco_board_texture_handle: None,
             charuco_target_spec,
+            last_detected_frame_with_charuco: Vec::new(),
         }
     }
 }
@@ -84,6 +91,8 @@ impl CalibrationApp {
         }
 
         self.video_players = players;
+        self.last_detected_frame_with_charuco =
+            (0..self.video_players.len()).map(|_| None).collect();
 
         self.video_texture_handles = self
             .video_players
@@ -92,12 +101,17 @@ impl CalibrationApp {
             .map(|(i, vp)| {
                 ctx.load_texture(
                     format!("video_frame_{i}"),
-                    dynamic_image_to_color_image(vp.color_image()),
+                    dynamic_image_to_color_image(vp.dynamic_image()),
                     TextureOptions::default(),
                 )
             })
             .collect();
 
+        Ok(())
+    }
+
+    pub(crate) fn update_board_from_spec(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        self.charuco_board = CharucoBoard::new(self.charuco_target_spec.to_board_spec())?;
         Ok(())
     }
 

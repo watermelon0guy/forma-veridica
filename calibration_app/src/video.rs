@@ -109,7 +109,11 @@ impl VideoPlayer {
         }
     }
 
-    pub(crate) fn color_image(&self) -> &DynamicImage {
+    pub(crate) fn current_frame(&self) -> u64 {
+        self.current_frame
+    }
+
+    pub(crate) fn dynamic_image(&self) -> &DynamicImage {
         &self.color_image
     }
 }

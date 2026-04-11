@@ -5,6 +5,7 @@ use calib_targets::{
 use image::GrayImage;
 use log::{debug, error, warn};
 use nalgebra::{Point2, Point3};
+use rayon::prelude::*;
 use vision_calibration::{
     core::{CorrespondenceView, NoMeta, PlanarDataset, RigView, RigViewObs, View},
     optim::{PlanarIntrinsicsEstimate, RigExtrinsicsDataset},
@@ -16,11 +17,29 @@ use vision_calibration::{
 
 pub fn get_charuco(
     charuco_board: &CharucoBoard,
+    // detector_params: CharucoParams,
     img: &GrayImage,
-) -> Result<CharucoDetectionResult, Box<dyn std::error::Error>> {
-    let detector_params = CharucoParams::for_board(&charuco_board.spec());
-    let charuco_detection_result = detect::detect_charuco(img, &detector_params)?;
-    Ok(charuco_detection_result)
+) -> Option<CharucoDetectionResult> {
+    let mut detector_params = CharucoParams::for_board(&charuco_board.spec());
+    detector_params.chessboard.min_corners = 6; // вместо 32
+    detector_params.min_marker_inliers = 2; // вместо 8
+    detector_params.min_secondary_marker_inliers = 1;
+    detector_params.chessboard.graph.min_spacing_pix = 1.0;
+    detector_params.chessboard.graph.max_spacing_pix = 300.0;
+    detector_params.max_hamming = 4;
+    // detector_params.scan.min_border_score = 0.5;
+    // detector_params.scan.inset_frac = 0.03;
+
+    let px_values: Vec<f32> = (30..=200).step_by(20).map(|x| x as f32).collect();
+
+    let result = px_values.into_par_iter().find_map_any(|px| {
+        let mut params = detector_params.clone();
+        params.px_per_square = px;
+
+        detect::detect_charuco(img, &params).ok()
+    });
+
+    result
 }
 
 pub fn calibrate_with_charuco(
@@ -51,9 +70,9 @@ fn correspondence_view_from_charuco(
     img: &image::ImageBuffer<image::Luma<u8>, Vec<u8>>,
 ) -> Option<CorrespondenceView> {
     let charuco_detection = match get_charuco(charuco_board, img) {
-        Ok(charuco_det) => charuco_det,
-        Err(e) => {
-            warn!("Error in charuco detection: {e}");
+        Some(charuco_det) => charuco_det,
+        None => {
+            warn!("Error in charuco detection");
             return None;
         }
     };
