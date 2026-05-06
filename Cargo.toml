@@ -9,18 +9,18 @@ resolver = "2"
 
 [workspace.dependencies]
 log = "0.4.29"
-env_logger = "0.11.9"
-eframe = "0.33.3"
+env_logger = "0.11.10"
+eframe = "0.34.2"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_yml = "0.0.12"
 rfd = "0.17.2"
-image = "0.25.9"
+image = "0.25.10"
 video-rs = { version = "0.11.0", features = ["ndarray"] }
-calib-targets = "0.5.2"
-vision-calibration="0.1.4"
+calib-targets = "0.8.0"
+vision-calibration="0.3.0"
 sift-wgpu="0.1.0"
-kiddo = "5.2.4"
-nalgebra = { version = "0.34.1", features = ["serde-serialize"] }
+kiddo = "5.3.1"
+nalgebra = { version = "0.34.2", features = ["serde-serialize"] }
 ndarray = "0.17.2"
-imageproc = "0.26.1"
-rayon = "1.11.0"
+imageproc = "0.26.2"
+rayon = "1.12.0"

@@ -5,8 +5,8 @@ use calib_targets::{
     printable::{PageOrientation, PageSize, PageSpec},
 };
 use eframe::egui::{
-    Align, CentralPanel, ComboBox, Context, Frame, Grid, Image, Layout, RichText, SidePanel,
-    Slider, SliderClamping, TextureHandle, TextureOptions, Ui, Vec2, vec2,
+    Align, Button, ComboBox, Frame, Grid, Image, Layout, Panel, RichText, Slider, SliderClamping,
+    TextureHandle, TextureOptions, Ui, Vec2, vec2,
 };
 use image::DynamicImage;
 use lib_cv::{calibration::get_charuco, utils::draw_charuco_detection};
@@ -21,18 +21,18 @@ use crate::{
 
 const PADDING: f32 = 10.0;
 
-pub(crate) fn render_content(app: &mut CalibrationApp, ctx: &Context) {
-    CentralPanel::default().show(ctx, |ui| match app.state {
-        CalibrationStep::SetupCharucoBoard => charuco_board_screen(app, ctx, ui),
-        CalibrationStep::PickVideos => pick_videos_screen(app, ctx, ui),
-        CalibrationStep::AlignVideos => align_video_screen(app, ctx, ui),
+pub(crate) fn render_content(app: &mut CalibrationApp, ui: &mut Ui) {
+    match app.state {
+        CalibrationStep::SetupCharucoBoard => charuco_board_screen(app, ui),
+        CalibrationStep::PickVideos => pick_videos_screen(app, ui),
+        CalibrationStep::AlignVideos => align_video_screen(app, ui),
         CalibrationStep::Calibration => todo!(),
-    });
+    }
 }
 
-fn charuco_board_screen(app: &mut CalibrationApp, ctx: &Context, ui: &mut Ui) {
+fn charuco_board_screen(app: &mut CalibrationApp, ui: &mut Ui) {
     let dict_len = app.charuco_target_spec.dictionary.codes.len() as u32;
-    SidePanel::left("parameters").show(ctx, |ui| {
+    Panel::left("parameters").show_inside(ui, |ui| {
         ui.add(
             Slider::new(
                 &mut app.charuco_target_spec.cols,
@@ -116,7 +116,7 @@ fn charuco_board_screen(app: &mut CalibrationApp, ctx: &Context, ui: &mut Ui) {
         margin_mm: page_margin_mm,
     };
 
-    eframe::egui::CentralPanel::default().show(ctx, |ui| {
+    eframe::egui::CentralPanel::default().show_inside(ui, |ui| {
         match &mut app.charuco_board_texture_handle {
             Some(texture) => {
                 let image =
@@ -132,7 +132,7 @@ fn charuco_board_screen(app: &mut CalibrationApp, ctx: &Context, ui: &mut Ui) {
                 let image =
                     charuco_target_spec_to_dynamic_image(&app.charuco_target_spec, 60, page_spec)
                         .unwrap_or(DynamicImage::default());
-                app.charuco_board_texture_handle = Some(ctx.load_texture(
+                app.charuco_board_texture_handle = Some(ui.ctx().load_texture(
                     "charuco_board",
                     dynamic_image_to_color_image(&image),
                     TextureOptions::default(),
@@ -142,8 +142,8 @@ fn charuco_board_screen(app: &mut CalibrationApp, ctx: &Context, ui: &mut Ui) {
     });
 }
 
-fn align_video_screen(app: &mut CalibrationApp, ctx: &Context, ui: &mut Ui) {
-    if let Err(e) = app.init_videos(ctx) {
+fn align_video_screen(app: &mut CalibrationApp, ui: &mut Ui) {
+    if let Err(e) = app.init_videos(ui.ctx()) {
         ui.label(format!("Ошибка инициализации видео: {e}"));
         return;
     };
@@ -311,7 +311,7 @@ fn render_video_card(
     });
 }
 
-fn render_video_path(app: &mut CalibrationApp, _ctx: &Context, ui: &mut Ui, path: &PathBuf) {
+fn render_video_path(app: &mut CalibrationApp, ui: &mut Ui, path: &PathBuf) {
     let file_name = path
         .file_name()
         .and_then(|name| name.to_str())
@@ -333,21 +333,25 @@ fn render_video_path(app: &mut CalibrationApp, _ctx: &Context, ui: &mut Ui, path
     ui.separator();
 }
 
-fn pick_videos_screen(app: &mut CalibrationApp, ctx: &Context, ui: &mut Ui) {
+fn pick_videos_screen(app: &mut CalibrationApp, ui: &mut Ui) {
     ui.vertical_centered(|ui| {
         if app.num_cameras() == 0 {
             ui.label("Выберите видео калибровок, чтобы начать");
         }
 
         for vid in &app.video_paths.clone() {
-            render_video_path(app, ctx, ui, vid);
+            render_video_path(app, ui, vid);
         }
 
         if ui.button("Добавить видео").clicked() {
             select_videos(app);
         };
-        if ui.button("Перейти к синхронизации видео").clicked() {
-            app.state = CalibrationStep::AlignVideos;
+
+        let to_align_button = Button::new("Перейти к синхронизации видео");
+        if app.video_paths.len() >= 2 {
+            if ui.add(to_align_button).clicked() {
+                app.state = CalibrationStep::AlignVideos;
+            }
         }
     });
 }

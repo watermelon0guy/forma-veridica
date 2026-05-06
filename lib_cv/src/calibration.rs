@@ -1,51 +1,35 @@
 use calib_targets::{
     charuco::{CharucoBoard, CharucoDetectionResult, CharucoParams},
-    detect::{self},
+    detect::detect_charuco,
 };
 use image::GrayImage;
 use log::{debug, error, warn};
 use nalgebra::{Point2, Point3};
-use rayon::prelude::*;
 use vision_calibration::{
     core::{CorrespondenceView, NoMeta, PlanarDataset, RigView, RigViewObs, View},
-    optim::{PlanarIntrinsicsEstimate, RigExtrinsicsDataset},
+    optim::RigExtrinsicsDataset,
     planar_intrinsics::{FilterOptions, run_calibration_with_filtering},
-    prelude::{PlanarIntrinsicsProblem, RigExtrinsicsProblem, run_rig_extrinsics},
-    rig_extrinsics::RigExtrinsicsExport,
+    prelude::PlanarIntrinsicsProblem,
+    rig_extrinsics::{RigExtrinsicsExport, run_calibration},
     session::CalibrationSession,
+};
+use vision_calibration::{
+    planar_intrinsics::PlanarIntrinsicsExport, rig_extrinsics::RigExtrinsicsProblem,
 };
 
 pub fn get_charuco(
     charuco_board: &CharucoBoard,
-    // detector_params: CharucoParams,
     img: &GrayImage,
 ) -> Option<CharucoDetectionResult> {
-    let mut detector_params = CharucoParams::for_board(&charuco_board.spec());
-    detector_params.chessboard.min_corners = 6; // вместо 32
-    detector_params.min_marker_inliers = 2; // вместо 8
-    detector_params.min_secondary_marker_inliers = 1;
-    detector_params.chessboard.graph.min_spacing_pix = 1.0;
-    detector_params.chessboard.graph.max_spacing_pix = 300.0;
-    detector_params.max_hamming = 4;
-    // detector_params.scan.min_border_score = 0.5;
-    // detector_params.scan.inset_frac = 0.03;
+    let detector_params = CharucoParams::for_board(&charuco_board.spec());
 
-    let px_values: Vec<f32> = (30..=200).step_by(20).map(|x| x as f32).collect();
-
-    let result = px_values.into_par_iter().find_map_any(|px| {
-        let mut params = detector_params.clone();
-        params.px_per_square = px;
-
-        detect::detect_charuco(img, &params).ok()
-    });
-
-    result
+    detect_charuco(img, &detector_params).ok()
 }
 
 pub fn calibrate_with_charuco(
     imgs: &Vec<GrayImage>,
     charuco_board: &CharucoBoard,
-) -> Result<PlanarIntrinsicsEstimate, Box<dyn std::error::Error>> {
+) -> Result<PlanarIntrinsicsExport, Box<dyn std::error::Error>> {
     let mut session = CalibrationSession::<PlanarIntrinsicsProblem>::new();
     let mut views = Vec::new();
     for img in imgs {
@@ -145,7 +129,7 @@ pub fn calibrate_multiple_with_charuco_from_images(
 
     let mut session = CalibrationSession::<RigExtrinsicsProblem>::new();
     session.set_input(rig_dataset)?;
-    run_rig_extrinsics(&mut session)?;
+    run_calibration(&mut session)?;
     let result = session.export()?;
 
     Ok(result)
@@ -206,7 +190,7 @@ pub fn calibrate_multiple_with_charuco_from_rigs(
 
     let mut session = CalibrationSession::<RigExtrinsicsProblem>::new();
     session.set_input(rig_dataset)?;
-    run_rig_extrinsics(&mut session)?;
+    run_calibration(&mut session)?;
     let result = session.export()?;
 
     Ok(result)

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use calib_targets::{
-    aruco::builtins::{DICT_4X4_100, DICT_6X6_100},
+    aruco::builtins::DICT_6X6_100,
     charuco::{CharucoBoard, CharucoDetectionResult},
     printable::{CharucoTargetSpec, PageSpec, PrintableTargetDocument, render_target_bundle},
 };
@@ -119,8 +119,8 @@ impl CalibrationApp {
 }
 
 impl App for CalibrationApp {
-    fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
-        render_content(self, ctx);
+    fn ui(&mut self, ui: &mut eframe::egui::Ui, _frame: &mut eframe::Frame) {
+        render_content(self, ui);
     }
 }
 

@@ -9,7 +9,7 @@ env_logger = { workspace = true }
 image = { workspace = true }
 video-rs = { workspace = true }
 calib-targets = { workspace = true }
-vision-calibration= { workspace = true }
+vision-calibration = { workspace = true }
 sift-wgpu = { workspace = true }
 kiddo = { workspace = true }
 nalgebra = { workspace = true }
