@@ -1,6 +1,6 @@
 use calib_targets::{
     charuco::{CharucoBoard, CharucoDetectionResult, CharucoParams},
-    detect::detect_charuco,
+    detect::{detect_charuco, detect_charuco_best},
 };
 use image::GrayImage;
 use log::{debug, error, warn};
@@ -21,9 +21,11 @@ pub fn get_charuco(
     charuco_board: &CharucoBoard,
     img: &GrayImage,
 ) -> Option<CharucoDetectionResult> {
-    let detector_params = CharucoParams::for_board(&charuco_board.spec());
-
-    detect_charuco(img, &detector_params).ok()
+    // Вместо ручного перебора:
+    let board_spec = charuco_board.spec();
+    let params_sweep = CharucoParams::sweep_for_board(&board_spec);
+    // Пробует 3 конфигурации: canonical, tighter, looser
+    detect_charuco_best(img, &params_sweep).ok()
 }
 
 pub fn calibrate_with_charuco(
