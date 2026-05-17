@@ -9,7 +9,10 @@ use eframe::egui::{
     TextureHandle, TextureOptions, Ui, Vec2, vec2,
 };
 use image::DynamicImage;
-use lib_cv::{calibration::get_charuco, utils::draw_charuco_detection};
+use lib_cv::{
+    calibration::{charuco::dump_board_info, get_charuco_grid_first, get_charuco_marker_first},
+    utils::draw_charuco_detection,
+};
 use log::{error, warn};
 
 use crate::{
@@ -91,13 +94,8 @@ fn charuco_board_screen(app: &mut CalibrationApp, ui: &mut Ui) {
         if ui.button("Сохранить паттерн").clicked() {
             if let Ok(()) = app.update_board_from_spec() {
                 app.state = CalibrationStep::PickVideos;
-                log::debug!(
-                    "CharucoBoard: rows={}, cols={}, dict_name={}, marker_size_rel={}",
-                    app.charuco_target_spec.rows,
-                    app.charuco_target_spec.cols,
-                    app.charuco_target_spec.dictionary.name,
-                    app.charuco_target_spec.marker_size_rel
-                );
+
+                dump_board_info(&app.charuco_board);
             }
         }
     });
@@ -177,8 +175,8 @@ fn align_video_screen(app: &mut CalibrationApp, ui: &mut Ui) {
         };
 
         if should_detect {
-            let grey_img = vp.dynamic_image().to_luma8();
-            let detection_result = get_charuco(&app.charuco_board, &grey_img);
+            let rgba_img = vp.dynamic_image().to_rgba8();
+            let detection_result = get_charuco_marker_first(&app.charuco_board, &rgba_img);
 
             log::debug!(
                 "Видео {}: размер кадра {}x{}, grey {}x{}, aspect_ratio={:.2}",

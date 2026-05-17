@@ -1,8 +1,11 @@
+use aruco_rs::core::dictionary::Dictionary;
 use calib_targets::{
+    LabeledCorner, TargetDetection, TargetKind,
     charuco::{CharucoBoard, CharucoDetectionResult, CharucoParams},
-    detect::{detect_charuco, detect_charuco_best},
+    core::GridAlignment,
+    detect::detect_charuco_best,
 };
-use image::GrayImage;
+use image::{GrayImage, RgbImage, RgbaImage};
 use log::{debug, error, warn};
 use nalgebra::{Point2, Point3};
 use vision_calibration::{
@@ -17,7 +20,13 @@ use vision_calibration::{
     planar_intrinsics::PlanarIntrinsicsExport, rig_extrinsics::RigExtrinsicsProblem,
 };
 
-pub fn get_charuco(
+use crate::calibration::charuco::{
+    build_marker_homographies, detect_aruco_markers, interpolate_charuco_corners, make_aruco_dict,
+};
+
+pub mod charuco;
+
+pub fn get_charuco_grid_first(
     charuco_board: &CharucoBoard,
     img: &GrayImage,
 ) -> Option<CharucoDetectionResult> {
@@ -26,6 +35,59 @@ pub fn get_charuco(
     let params_sweep = CharucoParams::sweep_for_board(&board_spec);
     // Пробует 3 конфигурации: canonical, tighter, looser
     detect_charuco_best(img, &params_sweep).ok()
+}
+
+pub fn get_charuco_marker_first(
+    charuco_board: &CharucoBoard,
+    img: &RgbaImage,
+) -> Option<CharucoDetectionResult> {
+    let aruco_dict_config = make_aruco_dict(&charuco_board.spec().dictionary);
+    let aruco_dict = Dictionary::new(aruco_dict_config);
+    let markers = detect_aruco_markers(img, &aruco_dict);
+
+    let transforms = build_marker_homographies(&charuco_board, &markers);
+    if transforms.is_empty() {
+        return None;
+    }
+    let corners = interpolate_charuco_corners(charuco_board, &transforms, 2);
+    if corners.is_empty() {
+        None
+    } else {
+        Some(convert_to_charuco_result(charuco_board, &corners))
+    }
+}
+
+fn convert_to_charuco_result(
+    board: &CharucoBoard,
+    corners: &[(usize, Point2<f32>)],
+) -> CharucoDetectionResult {
+    let mut labeled_corners = Vec::with_capacity(corners.len());
+
+    for (corner_id, pixel_pos) in corners {
+        let corner_id = *corner_id as u32;
+
+        // 3D-позиция угла на доске (уже всё считается через board)
+        let target_position = board.charuco_object_xy(corner_id);
+
+        labeled_corners.push(LabeledCorner {
+            position: *pixel_pos,
+            grid: None,
+            id: Some(corner_id),
+            target_position,
+            score: 1.0,
+        });
+    }
+
+    CharucoDetectionResult {
+        detection: TargetDetection {
+            kind: TargetKind::Charuco,
+            corners: labeled_corners,
+        },
+        markers: vec![],
+        alignment: GridAlignment::IDENTITY,
+        raw_marker_count: 0,
+        raw_marker_wrong_id_count: 0,
+    }
 }
 
 pub fn calibrate_with_charuco(
@@ -55,7 +117,7 @@ fn correspondence_view_from_charuco(
     charuco_board: &CharucoBoard,
     img: &image::ImageBuffer<image::Luma<u8>, Vec<u8>>,
 ) -> Option<CorrespondenceView> {
-    let charuco_detection = match get_charuco(charuco_board, img) {
+    let charuco_detection = match get_charuco_grid_first(charuco_board, img) {
         Some(charuco_det) => charuco_det,
         None => {
             warn!("Error in charuco detection");
