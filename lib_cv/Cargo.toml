@@ -16,4 +16,3 @@ nalgebra = { workspace = true }
 ndarray = { workspace = true }
 imageproc = { workspace = true }
 rayon = { workspace = true }
-aruco-rs = { workspace = true }

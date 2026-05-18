@@ -14,4 +14,3 @@ video-rs = { workspace = true }
 vision-calibration = { workspace = true }
 calib-targets = { workspace = true }
 image = { workspace = true }
-aruco-rs = { workspace = true }

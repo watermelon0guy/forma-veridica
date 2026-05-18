@@ -1,11 +1,10 @@
-use aruco_rs::core::dictionary::Dictionary;
 use calib_targets::{
     LabeledCorner, TargetDetection, TargetKind,
     charuco::{CharucoBoard, CharucoDetectionResult, CharucoParams},
     core::GridAlignment,
     detect::detect_charuco_best,
 };
-use image::{GrayImage, RgbImage, RgbaImage};
+use image::GrayImage;
 use log::{debug, error, warn};
 use nalgebra::{Point2, Point3};
 use vision_calibration::{
@@ -21,7 +20,7 @@ use vision_calibration::{
 };
 
 use crate::calibration::charuco::{
-    build_marker_homographies, detect_aruco_markers, interpolate_charuco_corners, make_aruco_dict,
+    build_marker_homographies, detect_aruco_markers, interpolate_charuco_corners,
 };
 
 pub mod charuco;
@@ -39,11 +38,9 @@ pub fn get_charuco_grid_first(
 
 pub fn get_charuco_marker_first(
     charuco_board: &CharucoBoard,
-    img: &RgbaImage,
+    img: &GrayImage,
 ) -> Option<CharucoDetectionResult> {
-    let aruco_dict_config = make_aruco_dict(&charuco_board.spec().dictionary);
-    let aruco_dict = Dictionary::new(aruco_dict_config);
-    let markers = detect_aruco_markers(img, &aruco_dict);
+    let markers = detect_aruco_markers(img, &charuco_board.spec().dictionary);
 
     let transforms = build_marker_homographies(&charuco_board, &markers);
     if transforms.is_empty() {

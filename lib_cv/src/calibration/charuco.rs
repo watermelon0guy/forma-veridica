@@ -1,103 +1,103 @@
 use std::collections::HashMap;
 
 use calib_targets::{
-    aruco::Dictionary,
+    GridCoords,
+    aruco::{MarkerCell, MarkerDetection, Matcher, ScanDecodeConfig, scan_decode_markers_in_cells},
     charuco::CharucoBoard,
-    core::{Homography, homography_from_4pt},
+    core::{GrayImageView, Homography, homography_from_4pt},
 };
-use image::{RgbImage, RgbaImage};
+use image::GrayImage;
+use imageproc::{
+    contours::find_contours, contrast::adaptive_threshold, geometry::approximate_polygon_dp,
+};
 use log::debug;
 
-use aruco_rs::{Marker, core::dictionary::DictionaryConfig};
 use nalgebra::Point2;
 
-/// Временная функция для изучения геометрии доски
-pub fn dump_board_info(board: &CharucoBoard) {
-    let spec = board.spec();
-    debug!(
-        "Board spec: rows={}, cols={}, cell_size={}, marker_size_rel={}",
-        spec.rows, spec.cols, spec.cell_size, spec.marker_size_rel
-    );
-
-    debug!(
-        "Expected inner corners: {} rows × {} cols = {} total",
-        board.expected_inner_rows(),
-        board.expected_inner_cols(),
-        board.expected_inner_rows() * board.expected_inner_cols(),
-    );
-
-    // Перебери все маркеры
-    for (id, pos) in board.iter_marker_positions() {
-        debug!("  Marker {id}: cell=({},{})", pos.i, pos.j);
-        // Какие углы доски окружают этот маркер?
-        if let Some(corners) = board.marker_surrounding_charuco_corners(id as i32) {
-            debug!("    surrounds corners: {corners:?}");
-        }
-    }
-
-    // Перебери все углы доски
-    for i in 0..board.expected_inner_rows() as i32 {
-        for j in 0..board.expected_inner_cols() as i32 {
-            if let Some(corner_id) = board.charuco_corner_id_from_board_corner(i, j) {
-                if let Some(xy) = board.charuco_object_xy(corner_id) {
-                    debug!(
-                        "  Corner ({i},{j}) → id={corner_id} → 3D=({},{})",
-                        xy.x, xy.y
-                    );
-                }
-            }
-        }
-    }
-}
-
 pub fn detect_aruco_markers(
-    img: &RgbaImage,
-    dict: &aruco_rs::core::dictionary::Dictionary,
-) -> Vec<Marker> {
-    let img_buf = aruco_rs::ImageBuffer {
-        data: img.as_raw(),
-        width: img.width(),
-        height: img.height(),
-    };
+    img: &GrayImage,
+    dict: &calib_targets::aruco::Dictionary,
+) -> Vec<MarkerDetection> {
+    // Находим четырехугольники
+    let quads = find_marker_quads(img);
+    debug!(
+        "detect_aruco_markers: image={}x{}, quads_found={}",
+        img.width(),
+        img.height(),
+        quads.len()
+    );
 
-    let cv = aruco_rs::cv::scalar::ScalarCV;
-    let mut detector = aruco_rs::core::detector::Detector::new(&dict, cv);
-    detector.adaptive_th_size = 15;
-    detector.min_edge_length = 15.0;
-    let markers = detector.detect(&img_buf);
-    debug!("Обнаружено: {}", markers.len());
-    markers
-}
-
-/// Переворачивает порядок битов в коде (n_bits младших бит)
-fn reverse_bits(mut code: u64, n_bits: usize) -> u64 {
-    let mut result = 0u64;
-    for _ in 0..n_bits {
-        result = (result << 1) | (code & 1);
-        code >>= 1;
+    if quads.is_empty() {
+        return Vec::new();
     }
-    result
-}
 
-pub fn make_aruco_dict(calib: &Dictionary) -> &'static DictionaryConfig {
-    let n_bits = calib.marker_size * calib.marker_size;
-    let reversed: Vec<u64> = calib
-        .codes
+    let cells: Vec<MarkerCell> = quads
         .iter()
-        .map(|&c| reverse_bits(c, n_bits))
+        .map(|q| MarkerCell {
+            gc: GridCoords { i: 0, j: 0 },
+            corners_img: *q,
+        })
         .collect();
-    let config = DictionaryConfig {
-        n_bits,
-        tau: calib.max_correction_bits as usize,
-        code_list: Vec::leak(reversed), // 'static
+
+    let view = GrayImageView {
+        width: img.width() as usize,
+        height: img.height() as usize,
+        data: img.as_raw(),
     };
-    Box::leak(Box::new(config))
+    let matcher = Matcher::new(*dict, dict.max_correction_bits);
+
+    let mut perimeters: Vec<f32> = quads
+        .iter()
+        .map(|q| {
+            let d01 = (q[1] - q[0]).norm();
+            let d12 = (q[2] - q[1]).norm();
+            let d23 = (q[3] - q[2]).norm();
+            let d30 = (q[0] - q[3]).norm();
+            d01 + d12 + d23 + d30
+        })
+        .collect();
+    perimeters.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let px_per_square = perimeters[perimeters.len() / 2] / 4.0;
+
+    // Фильтруем слишком мелкие quads
+    let min_perimeter = px_per_square * 4.0 * 0.4;
+    let filtered_cells: Vec<MarkerCell> = cells
+        .into_iter()
+        .filter(|cell| {
+            let q = &cell.corners_img;
+            let d01 = (q[1] - q[0]).norm();
+            let d12 = (q[2] - q[1]).norm();
+            let d23 = (q[3] - q[2]).norm();
+            let d30 = (q[0] - q[3]).norm();
+            (d01 + d12 + d23 + d30) >= min_perimeter
+        })
+        .collect();
+    debug!(
+        "detect_aruco_markers: {} cells after size filter (min_perimeter={:.0})",
+        filtered_cells.len(),
+        min_perimeter
+    );
+
+    if filtered_cells.is_empty() {
+        return Vec::new();
+    }
+
+    let cfg = ScanDecodeConfig {
+        border_bits: 1,
+        inset_frac: 0.04,
+        marker_size_rel: 1.0,
+        min_border_score: 0.5,
+        dedup_by_id: true,
+        multi_threshold: true,
+    };
+
+    scan_decode_markers_in_cells(&view, &filtered_cells, px_per_square, &cfg, &matcher)
 }
 
 pub fn build_marker_homographies(
     board: &CharucoBoard,
-    markers: &[Marker],
-) -> HashMap<i32, Homography> {
+    markers: &[MarkerDetection],
+) -> HashMap<u32, Homography> {
     let spec = board.spec();
     let cell_size = spec.cell_size;
     let marker_size = cell_size * spec.marker_size_rel;
@@ -106,9 +106,15 @@ pub fn build_marker_homographies(
     let mut transforms = HashMap::new();
 
     for marker in markers {
-        let (sx, sy) = match board.marker_cell(marker.id) {
+        let (sx, sy) = match board.marker_cell(marker.id as i32) {
             Some(cell) => cell,
-            None => continue,
+            None => {
+                debug!(
+                    "build_marker_homographies: marker id={} not on board",
+                    marker.id
+                );
+                continue;
+            }
         };
 
         let cx = (sx as f32 + 0.5) * cell_size;
@@ -119,23 +125,45 @@ pub fn build_marker_homographies(
             Point2::new(cx + half, cy + half), // BR
             Point2::new(cx - half, cy + half), // BL
         ];
-
-        let dst: [nalgebra::Point2<f32>; 4] = marker
-            .corners
-            .map(|p| nalgebra::Point2::new(p.x as f32, p.y as f32));
+        let dst = match marker.corners_img {
+            Some(img_corners) => img_corners,
+            None => {
+                debug!(
+                    "build_marker_homographies: marker id={} has no corners_img",
+                    marker.id
+                );
+                continue;
+            }
+        };
 
         if let Some(h) = homography_from_4pt(&src, &dst) {
-            if h.h.determinant().abs() > 1e-6 {
-                transforms.insert(marker.id, Homography::from(h));
+            let det = h.h.determinant().abs();
+            if det > 1e-6 {
+                transforms.insert(marker.id, h);
+            } else {
+                debug!(
+                    "build_marker_homographies: marker id={} singular homography (det={:.2e})",
+                    marker.id, det
+                );
             }
+        } else {
+            debug!(
+                "build_marker_homographies: marker id={} homography_from_4pt returned None",
+                marker.id
+            );
         }
     }
+    debug!(
+        "build_marker_homographies: {} valid transforms from {} markers",
+        transforms.len(),
+        markers.len()
+    );
     transforms
 }
 
 pub fn interpolate_charuco_corners(
     board: &CharucoBoard,
-    transforms: &HashMap<i32, Homography>,
+    transforms: &HashMap<u32, Homography>,
     min_markers: usize,
 ) -> Vec<(usize, Point2<f32>)> {
     let mut corners = Vec::new();
@@ -156,7 +184,7 @@ pub fn interpolate_charuco_corners(
 
             for (marker_id, h) in transforms {
                 // Проверяем, окружает ли этот маркер данный угол
-                let surrounding = board.marker_surrounding_charuco_corners(*marker_id);
+                let surrounding = board.marker_surrounding_charuco_corners(*marker_id as i32);
                 if let Some(ids) = surrounding {
                     if ids.contains(&corner_id) {
                         let proj = h.apply(obj_xy);
@@ -177,5 +205,154 @@ pub fn interpolate_charuco_corners(
             }
         }
     }
+    debug!(
+        "interpolate_charuco_corners: {} corners with >= {} markers (from {} transforms)",
+        corners.len(),
+        min_markers,
+        transforms.len()
+    );
     corners
+}
+
+/// Инвертировать GrayImage (255 - pixel)
+fn invert_binary(img: &GrayImage) -> GrayImage {
+    image::ImageBuffer::from_fn(img.width(), img.height(), |x, y| {
+        image::Luma([255 - img.get_pixel(x, y).0[0]])
+    })
+}
+
+pub fn find_marker_quads(gray: &GrayImage) -> Vec<[Point2<f32>; 4]> {
+    let mut all_quads = Vec::new();
+    let max_dim = gray.width().max(gray.height()) as f64;
+    let min_perimeter = (0.03 * max_dim) as usize;
+    let max_perimeter = (4.0 * max_dim) as usize;
+
+    for win_size in [3u32, 13, 23] {
+        let binary = adaptive_threshold(gray, win_size, 7);
+
+        // Ищем на прямом И инвертированном (как OpenCV — оба варианта)
+        for (label, bin_img) in [("direct", &binary), ("inverted", &invert_binary(&binary))] {
+            let contours: Vec<imageproc::contours::Contour<i32>> = find_contours(bin_img);
+            debug!(
+                "find_marker_quads: win={}, {}: {} raw contours",
+                win_size,
+                label,
+                contours.len()
+            );
+            let mut kept = 0usize;
+
+            for c in &contours {
+                let n = c.points.len();
+                if n < min_perimeter || n > max_perimeter {
+                    continue;
+                }
+
+                // Конвертация imageproc::Point<i32> → Vec<imageproc::point::Point<i32>>
+                let pts: Vec<imageproc::point::Point<i32>> = c
+                    .points
+                    .iter()
+                    .map(|p| imageproc::point::Point::new(p.x, p.y))
+                    .collect();
+
+                let epsilon = n as f64 * 0.05;
+                let approx = approximate_polygon_dp(&pts, epsilon, true);
+
+                if approx.len() != 4 || !is_contour_convex(&approx) {
+                    continue;
+                }
+
+                // Мин. расстояние между углами
+                let min_dist = min_corner_distance_sq(&approx);
+                let threshold = (n as f64 * 0.05).powi(2);
+                if min_dist < threshold {
+                    continue;
+                }
+
+                // → [Point2<f32>; 4]
+                let quad: [Point2<f32>; 4] = reorder_corners(&[
+                    Point2::new(approx[0].x as f32, approx[0].y as f32),
+                    Point2::new(approx[1].x as f32, approx[1].y as f32),
+                    Point2::new(approx[2].x as f32, approx[2].y as f32),
+                    Point2::new(approx[3].x as f32, approx[3].y as f32),
+                ]);
+
+                all_quads.push(quad);
+                kept += 1;
+            }
+            debug!(
+                "find_marker_quads: win={}, {}: kept={} quads",
+                win_size, label, kept
+            );
+        }
+    }
+    debug!("find_marker_quads: total quads={}", all_quads.len());
+    all_quads
+}
+
+/// Переупорядочить 4 угла в порядок TL, TR, BR, BL (как OpenCV _reorderCandidatesCorners).
+/// Работает для произвольной ориентации доски.
+fn reorder_corners(c: &[Point2<f32>; 4]) -> [Point2<f32>; 4] {
+    let mut pts = *c;
+    // Центр масс
+    let cx: f32 = pts.iter().map(|p| p.x).sum::<f32>() / 4.0;
+    let cy: f32 = pts.iter().map(|p| p.y).sum::<f32>() / 4.0;
+    // Сортируем по углу относительно центра
+    pts.sort_by(|a, b| {
+        let aa = (a.y - cy).atan2(a.x - cx);
+        let ab = (b.y - cy).atan2(b.x - cx);
+        aa.partial_cmp(&ab).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    // TL = минимальная сумма x+y (ближе к началу координат)
+    let tl_idx = (0..4)
+        .min_by(|&i, &j| {
+            let si = pts[i].x + pts[i].y;
+            let sj = pts[j].x + pts[j].y;
+            si.partial_cmp(&sj).unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .unwrap();
+    [
+        pts[tl_idx],
+        pts[(tl_idx + 1) % 4],
+        pts[(tl_idx + 2) % 4],
+        pts[(tl_idx + 3) % 4],
+    ]
+}
+
+fn is_contour_convex(poly: &[imageproc::point::Point<i32>]) -> bool {
+    if poly.len() < 3 {
+        return false;
+    }
+    let mut sign = 0i64;
+    let n = poly.len();
+    for i in 0..n {
+        let p0 = poly[i];
+        let p1 = poly[(i + 1) % n];
+        let p2 = poly[(i + 2) % n];
+        let dx1 = (p1.x - p0.x) as i64;
+        let dy1 = (p1.y - p0.y) as i64;
+        let dx2 = (p2.x - p1.x) as i64;
+        let dy2 = (p2.y - p1.y) as i64;
+        let cross = dx1 * dy2 - dy1 * dx2;
+        if cross != 0 {
+            if sign == 0 {
+                sign = cross;
+            } else if sign.signum() != cross.signum() {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn min_corner_distance_sq(poly: &[imageproc::point::Point<i32>]) -> f64 {
+    let n = poly.len();
+    let mut min_d = f64::MAX;
+    for i in 0..n {
+        let p0 = poly[i];
+        let p1 = poly[(i + 1) % n];
+        let dx = (p1.x - p0.x) as f64;
+        let dy = (p1.y - p0.y) as f64;
+        min_d = min_d.min(dx * dx + dy * dy);
+    }
+    min_d
 }
