@@ -14,13 +14,24 @@ use std::collections::HashMap;
 
 use nalgebra::Point2;
 
+/// Quad с ассоциированным контуром
+#[derive(Debug, Clone)]
+pub struct QuadWithContour {
+    pub corners: [Point2<f32>; 4],
+    pub contour: Vec<Point2<i32>>,
+}
+
 // После find_marker_quads: удалить quads с почти совпадающими центрами
-fn dedup_quads(quads: &mut Vec<[Point2<f32>; 4]>, min_dist: f32) {
+fn dedup_quads(quads: &mut Vec<QuadWithContour>, min_dist: f32) {
     let mut kept = Vec::new();
     for quad in quads.drain(..) {
-        let center = quad.iter().fold(Point2::origin(), |a, p| a + p.coords) / 4.0;
-        if kept.iter().all(|k: &[Point2<f32>; 4]| {
-            let kc = k.iter().fold(Point2::origin(), |a, p| a + p.coords) / 4.0;
+        let center = quad
+            .corners
+            .iter()
+            .fold(Point2::origin(), |a, p| a + p.coords)
+            / 4.0;
+        if kept.iter().all(|k: &QuadWithContour| {
+            let kc = k.corners.iter().fold(Point2::origin(), |a, p| a + p.coords) / 4.0;
             (center - kc).norm() >= min_dist
         }) {
             kept.push(quad);
@@ -202,9 +213,14 @@ pub fn detect_aruco_markers(
 
     dedup_quads(&mut quads, 5.0);
 
+    // Уточнение углов: сначала через линии контура, потом cornerSubPix
     for quad in &mut quads {
-        for corner in quad.iter_mut() {
-            refine_corner(&img, corner, 5, -1, 30, 0.1);
+        // 1. Уточнение через аппроксимацию линий (использует весь контур)
+        refine_corner_lines(&mut quad.corners, &quad.contour);
+
+        // 2. Уточнение через cornerSubPix (локальное уточнение)
+        for corner in quad.corners.iter_mut() {
+            refine_corner(img, corner, 5, -1, 30, 0.1);
         }
     }
 
@@ -212,7 +228,7 @@ pub fn detect_aruco_markers(
         .iter()
         .map(|q| MarkerCell {
             gc: GridCoords { i: 0, j: 0 },
-            corners_img: *q,
+            corners_img: q.corners,
         })
         .collect();
 
@@ -226,10 +242,10 @@ pub fn detect_aruco_markers(
     let mut perimeters: Vec<f32> = quads
         .iter()
         .map(|q| {
-            let d01 = (q[1] - q[0]).norm();
-            let d12 = (q[2] - q[1]).norm();
-            let d23 = (q[3] - q[2]).norm();
-            let d30 = (q[0] - q[3]).norm();
+            let d01 = (q.corners[1] - q.corners[0]).norm();
+            let d12 = (q.corners[2] - q.corners[1]).norm();
+            let d23 = (q.corners[3] - q.corners[2]).norm();
+            let d30 = (q.corners[0] - q.corners[3]).norm();
             d01 + d12 + d23 + d30
         })
         .collect();
@@ -395,14 +411,170 @@ pub fn interpolate_charuco_corners(
     corners
 }
 
-/// Инвертировать GrayImage (255 - pixel)
-fn invert_binary(img: &GrayImage) -> GrayImage {
-    image::ImageBuffer::from_fn(img.width(), img.height(), |x, y| {
-        image::Luma([255 - img.get_pixel(x, y).0[0]])
-    })
+/// Уточнение углов через аппроксимацию линий контура (OpenCV _refineCandidateLines).
+/// Использует все точки контура для МНК-аппроксимации 4 сторон и находит пересечения.
+fn refine_corner_lines(quad: &mut [Point2<f32>; 4], contour: &[Point2<i32>]) {
+    if contour.len() < 8 {
+        return; // Недостаточно точек
+    }
+
+    // Конвертируем контур в f32
+    let contour_f32: Vec<Point2<f32>> = contour
+        .iter()
+        .map(|p| Point2::new(p.x as f32, p.y as f32))
+        .collect();
+
+    // Группы точек для каждой стороны (4 стороны + временная группа)
+    let mut side_points: [Vec<Point2<f32>>; 5] =
+        [Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+
+    // Находим индексы углов в контуре
+    let mut corner_indices: [usize; 4] = [0; 4];
+    for j in 0..4 {
+        let corner = quad[j];
+        // Находим ближайшую точку контура к углу
+        let mut min_dist = f32::MAX;
+        let mut min_idx = 0;
+        for (i, pt) in contour_f32.iter().enumerate() {
+            let d = (pt.x - corner.x).powi(2) + (pt.y - corner.y).powi(2);
+            if d < min_dist {
+                min_dist = d;
+                min_idx = i;
+            }
+        }
+        corner_indices[j] = min_idx;
+    }
+
+    // Группируем точки контура по сторонам
+    let mut current_side = 0;
+    for i in 0..contour_f32.len() {
+        // Проверяем, не является ли текущая точка углом
+        for j in 0..4 {
+            if i == corner_indices[j] {
+                current_side = j;
+                break;
+            }
+        }
+        side_points[current_side].push(contour_f32[i]);
+    }
+
+    // Переносим временную группу (4) в соответствующую сторону
+    if !side_points[4].is_empty() {
+        let target_side = current_side;
+        let temp_points: Vec<Point2<f32>> = side_points[4].drain(..).collect();
+        side_points[target_side].extend(temp_points);
+    }
+
+    // Определяем направление контура (по порядку индексов углов)
+    let inc = if corner_indices[0] > corner_indices[1] && corner_indices[3] > corner_indices[0] {
+        -1
+    } else if corner_indices[2] > corner_indices[3] && corner_indices[1] > corner_indices[2] {
+        -1
+    } else {
+        1
+    };
+
+    // Аппроксимируем линии для каждой стороны методом наименьших квадратов
+    let mut lines: [(f32, f32, f32); 4] = [(0.0, 0.0, 0.0); 4];
+    for i in 0..4 {
+        lines[i] = fit_line_lsq(&side_points[i]);
+    }
+
+    // Находим пересечения соседних линий
+    for i in 0..4 {
+        let line1 = lines[i];
+        let line2 = if inc < 0 {
+            lines[(i + 1) % 4] // следующая линия
+        } else {
+            lines[(i + 3) % 4] // предыдущая линия
+        };
+
+        if let Some(intersection) = line_intersection(line1, line2) {
+            quad[i] = intersection;
+        }
+    }
 }
 
-pub fn find_marker_quads(gray: &GrayImage) -> Vec<[Point2<f32>; 4]> {
+/// МНК-аппроксимация линии ax + by + c = 0.
+/// Возвращает (a, b, c) нормализованные.
+fn fit_line_lsq(points: &[Point2<f32>]) -> (f32, f32, f32) {
+    if points.len() < 2 {
+        return (1.0, 0.0, 0.0);
+    }
+
+    // Находим границы
+    let mut min_x = points[0].x;
+    let mut max_x = points[0].x;
+    let mut min_y = points[0].y;
+    let mut max_y = points[0].y;
+
+    for p in points {
+        min_x = min_x.min(p.x);
+        max_x = max_x.max(p.x);
+        min_y = min_y.min(p.y);
+        max_y = max_y.max(p.y);
+    }
+
+    let dx = max_x - min_x;
+    let dy = max_y - min_y;
+
+    if dx > dy {
+        // Линия ближе к горизонтальной: y = k*x + b
+        // Решаем МНК для y = k*x + b
+        let n = points.len() as f32;
+        let sum_x: f32 = points.iter().map(|p| p.x).sum();
+        let sum_y: f32 = points.iter().map(|p| p.y).sum();
+        let sum_x2: f32 = points.iter().map(|p| p.x * p.x).sum();
+        let sum_xy: f32 = points.iter().map(|p| p.x * p.y).sum();
+
+        let denom = n * sum_x2 - sum_x * sum_x;
+        if denom.abs() < 1e-6 {
+            return (0.0, 1.0, -sum_y / n); // Вертикальная линия примерно
+        }
+
+        let k = (n * sum_xy - sum_x * sum_y) / denom;
+        let b = (sum_y - k * sum_x) / n;
+
+        // Преобразуем y = kx + b в ax + by + c = 0  =>  kx - y + b = 0
+        (k, -1.0, b)
+    } else {
+        // Линия ближе к вертикальной: x = k*y + b
+        let n = points.len() as f32;
+        let sum_x: f32 = points.iter().map(|p| p.x).sum();
+        let sum_y: f32 = points.iter().map(|p| p.y).sum();
+        let sum_y2: f32 = points.iter().map(|p| p.y * p.y).sum();
+        let sum_xy: f32 = points.iter().map(|p| p.x * p.y).sum();
+
+        let denom = n * sum_y2 - sum_y * sum_y;
+        if denom.abs() < 1e-6 {
+            return (1.0, 0.0, -sum_x / n); // Горизонтальная линия примерно
+        }
+
+        let k = (n * sum_xy - sum_x * sum_y) / denom;
+        let b = (sum_x - k * sum_y) / n;
+
+        // Преобразуем x = ky + b в ax + by + c = 0  =>  x - ky - b = 0
+        (1.0, -k, -b)
+    }
+}
+
+/// Находит пересечение двух линий ax + by + c = 0.
+fn line_intersection(line1: (f32, f32, f32), line2: (f32, f32, f32)) -> Option<Point2<f32>> {
+    let (a1, b1, c1) = line1;
+    let (a2, b2, c2) = line2;
+
+    let det = a1 * b2 - a2 * b1;
+    if det.abs() < 1e-6 {
+        return None; // Параллельны
+    }
+
+    let x = (b1 * c2 - b2 * c1) / det;
+    let y = (a2 * c1 - a1 * c2) / det;
+
+    Some(Point2::new(x, y))
+}
+
+pub fn find_marker_quads(gray: &GrayImage) -> Vec<QuadWithContour> {
     let mut all_quads = Vec::new();
     let max_dim = gray.width().max(gray.height()) as f64;
     let min_perimeter = (0.03 * max_dim) as usize;
@@ -411,60 +583,57 @@ pub fn find_marker_quads(gray: &GrayImage) -> Vec<[Point2<f32>; 4]> {
     for win_size in [13, 23] {
         let binary = adaptive_threshold(gray, win_size, 7);
 
-        // Ищем на прямом И инвертированном (как OpenCV — оба варианта)
-        for (label, bin_img) in [("direct", &binary), ("inverted", &invert_binary(&binary))] {
-            let contours: Vec<imageproc::contours::Contour<i32>> = find_contours(bin_img);
-            debug!(
-                "find_marker_quads: win={}, {}: {} raw contours",
-                win_size,
-                label,
-                contours.len()
-            );
-            let mut kept = 0usize;
+        let contours: Vec<imageproc::contours::Contour<i32>> = find_contours(&binary);
+        debug!(
+            "find_marker_quads: win={}, {} raw contours",
+            win_size,
+            contours.len()
+        );
+        let mut kept = 0usize;
 
-            for c in &contours {
-                let n = c.points.len();
-                if n < min_perimeter || n > max_perimeter {
-                    continue;
-                }
-
-                // Конвертация imageproc::Point<i32> → Vec<imageproc::point::Point<i32>>
-                let pts: Vec<imageproc::point::Point<i32>> = c
-                    .points
-                    .iter()
-                    .map(|p| imageproc::point::Point::new(p.x, p.y))
-                    .collect();
-
-                let epsilon = n as f64 * 0.05;
-                let approx = approximate_polygon_dp(&pts, epsilon, true);
-
-                if approx.len() != 4 || !is_contour_convex(&approx) {
-                    continue;
-                }
-
-                // Мин. расстояние между углами
-                let min_dist = min_corner_distance_sq(&approx);
-                let threshold = (n as f64 * 0.05).powi(2);
-                if min_dist < threshold {
-                    continue;
-                }
-
-                // → [Point2<f32>; 4]
-                let quad: [Point2<f32>; 4] = reorder_corners(&[
-                    Point2::new(approx[0].x as f32, approx[0].y as f32),
-                    Point2::new(approx[1].x as f32, approx[1].y as f32),
-                    Point2::new(approx[2].x as f32, approx[2].y as f32),
-                    Point2::new(approx[3].x as f32, approx[3].y as f32),
-                ]);
-
-                all_quads.push(quad);
-                kept += 1;
+        for c in &contours {
+            let n = c.points.len();
+            if n < min_perimeter || n > max_perimeter {
+                continue;
             }
-            debug!(
-                "find_marker_quads: win={}, {}: kept={} quads",
-                win_size, label, kept
-            );
+
+            // Конвертация imageproc::Point<i32> → Vec<imageproc::point::Point<i32>>
+            let pts: Vec<imageproc::point::Point<i32>> = c
+                .points
+                .iter()
+                .map(|p| imageproc::point::Point::new(p.x, p.y))
+                .collect();
+
+            let epsilon = n as f64 * 0.05;
+            let approx = approximate_polygon_dp(&pts, epsilon, true);
+
+            if approx.len() != 4 || !is_contour_convex(&approx) {
+                continue;
+            }
+
+            // Мин. расстояние между углами
+            let min_dist = min_corner_distance_sq(&approx);
+            let threshold = (n as f64 * 0.05).powi(2);
+            if min_dist < threshold {
+                continue;
+            }
+
+            // → [Point2<f32>; 4]
+            let corners: [Point2<f32>; 4] = reorder_corners(&[
+                Point2::new(approx[0].x as f32, approx[0].y as f32),
+                Point2::new(approx[1].x as f32, approx[1].y as f32),
+                Point2::new(approx[2].x as f32, approx[2].y as f32),
+                Point2::new(approx[3].x as f32, approx[3].y as f32),
+            ]);
+
+            // Сохраняем оригинальный контур
+            let contour: Vec<Point2<i32>> =
+                c.points.iter().map(|p| Point2::new(p.x, p.y)).collect();
+
+            all_quads.push(QuadWithContour { corners, contour });
+            kept += 1;
         }
+        debug!("find_marker_quads: win={}, kept={} quads", win_size, kept);
     }
     debug!("find_marker_quads: total quads={}", all_quads.len());
     all_quads
