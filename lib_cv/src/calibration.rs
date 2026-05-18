@@ -1,5 +1,6 @@
 use calib_targets::{
     LabeledCorner, TargetDetection, TargetKind,
+    aruco::MarkerDetection,
     charuco::{CharucoBoard, CharucoDetectionResult, CharucoParams},
     core::GridAlignment,
     detect::detect_charuco_best,
@@ -50,13 +51,14 @@ pub fn get_charuco_marker_first(
     if corners.is_empty() {
         None
     } else {
-        Some(convert_to_charuco_result(charuco_board, &corners))
+        Some(convert_to_charuco_result(charuco_board, &corners, markers))
     }
 }
 
 fn convert_to_charuco_result(
     board: &CharucoBoard,
     corners: &[(usize, Point2<f32>)],
+    markers: Vec<MarkerDetection>,
 ) -> CharucoDetectionResult {
     let mut labeled_corners = Vec::with_capacity(corners.len());
 
@@ -75,14 +77,16 @@ fn convert_to_charuco_result(
         });
     }
 
+    let markers_count = markers.len();
+
     CharucoDetectionResult {
         detection: TargetDetection {
             kind: TargetKind::Charuco,
             corners: labeled_corners,
         },
-        markers: vec![],
+        markers: markers,
         alignment: GridAlignment::IDENTITY,
-        raw_marker_count: 0,
+        raw_marker_count: markers_count,
         raw_marker_wrong_id_count: 0,
     }
 }

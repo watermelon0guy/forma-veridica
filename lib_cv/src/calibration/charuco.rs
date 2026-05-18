@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use calib_targets::{
     GridCoords,
     aruco::{MarkerCell, MarkerDetection, Matcher, ScanDecodeConfig, scan_decode_markers_in_cells},
@@ -11,15 +9,31 @@ use imageproc::{
     contours::find_contours, contrast::adaptive_threshold, geometry::approximate_polygon_dp,
 };
 use log::debug;
+use rayon::prelude::*;
+use std::collections::HashMap;
 
 use nalgebra::Point2;
+// После find_marker_quads: удалить quads с почти совпадающими центрами
+fn dedup_quads(quads: &mut Vec<[Point2<f32>; 4]>, min_dist: f32) {
+    let mut kept = Vec::new();
+    for quad in quads.clone() {
+        let center = quad.iter().fold(Point2::origin(), |a, p| a + p.coords) / 4.0;
+        if kept.iter().all(|k: &[Point2<f32>; 4]| {
+            let kc = k.iter().fold(Point2::origin(), |a, p| a + p.coords) / 4.0;
+            (center - kc).norm() >= min_dist
+        }) {
+            kept.push(quad);
+        }
+    }
+    *quads = kept;
+}
 
 pub fn detect_aruco_markers(
     img: &GrayImage,
     dict: &calib_targets::aruco::Dictionary,
 ) -> Vec<MarkerDetection> {
     // Находим четырехугольники
-    let quads = find_marker_quads(img);
+    let mut quads = find_marker_quads(img);
     debug!(
         "detect_aruco_markers: image={}x{}, quads_found={}",
         img.width(),
@@ -30,6 +44,8 @@ pub fn detect_aruco_markers(
     if quads.is_empty() {
         return Vec::new();
     }
+
+    dedup_quads(&mut quads, 5.0);
 
     let cells: Vec<MarkerCell> = quads
         .iter()
@@ -60,7 +76,7 @@ pub fn detect_aruco_markers(
     let px_per_square = perimeters[perimeters.len() / 2] / 4.0;
 
     // Фильтруем слишком мелкие quads
-    let min_perimeter = px_per_square * 4.0 * 0.4;
+    let min_perimeter = px_per_square * 4.0 * 0.6;
     let filtered_cells: Vec<MarkerCell> = cells
         .into_iter()
         .filter(|cell| {
@@ -91,7 +107,11 @@ pub fn detect_aruco_markers(
         multi_threshold: true,
     };
 
-    scan_decode_markers_in_cells(&view, &filtered_cells, px_per_square, &cfg, &matcher)
+    let markers: Vec<_> = filtered_cells
+        .par_chunks(32)
+        .flat_map(|chunk| scan_decode_markers_in_cells(&view, chunk, px_per_square, &cfg, &matcher))
+        .collect();
+    markers
 }
 
 pub fn build_marker_homographies(
@@ -168,6 +188,15 @@ pub fn interpolate_charuco_corners(
 ) -> Vec<(usize, Point2<f32>)> {
     let mut corners = Vec::new();
 
+    let mut corner_to_homographies: HashMap<usize, Vec<&Homography>> = HashMap::new();
+    for (marker_id, h) in transforms {
+        if let Some(ids) = board.marker_surrounding_charuco_corners(*marker_id as i32) {
+            for c_id in ids {
+                corner_to_homographies.entry(c_id).or_default().push(h);
+            }
+        }
+    }
+
     for i in 0..board.expected_inner_rows() as i32 {
         for j in 0..board.expected_inner_cols() as i32 {
             let corner_id = match board.charuco_corner_id_from_board_corner(i, j) {
@@ -180,18 +209,10 @@ pub fn interpolate_charuco_corners(
                 None => continue,
             };
 
-            let mut projections = Vec::new();
-
-            for (marker_id, h) in transforms {
-                // Проверяем, окружает ли этот маркер данный угол
-                let surrounding = board.marker_surrounding_charuco_corners(*marker_id as i32);
-                if let Some(ids) = surrounding {
-                    if ids.contains(&corner_id) {
-                        let proj = h.apply(obj_xy);
-                        projections.push(proj);
-                    }
-                }
-            }
+            let projections: Vec<_> = corner_to_homographies
+                .get(&corner_id)
+                .map(|hs| hs.iter().map(|h| h.apply(obj_xy)).collect())
+                .unwrap_or_default();
 
             if projections.len() >= min_markers {
                 let sum: Point2<f32> = projections
@@ -206,9 +227,8 @@ pub fn interpolate_charuco_corners(
         }
     }
     debug!(
-        "interpolate_charuco_corners: {} corners with >= {} markers (from {} transforms)",
+        "interpolate_charuco_corners: {} corners (from {} transforms)",
         corners.len(),
-        min_markers,
         transforms.len()
     );
     corners
@@ -227,7 +247,7 @@ pub fn find_marker_quads(gray: &GrayImage) -> Vec<[Point2<f32>; 4]> {
     let min_perimeter = (0.03 * max_dim) as usize;
     let max_perimeter = (4.0 * max_dim) as usize;
 
-    for win_size in [3u32, 13, 23] {
+    for win_size in [13, 23] {
         let binary = adaptive_threshold(gray, win_size, 7);
 
         // Ищем на прямом И инвертированном (как OpenCV — оба варианта)
