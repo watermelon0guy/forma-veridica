@@ -88,7 +88,7 @@ fn charuco_board_screen(app: &mut CalibrationApp, ui: &mut Ui) {
                 }
             });
 
-        if ui.button("Сохранить паттерн").clicked() {
+        if ui.button("Продолжить").clicked() {
             if let Ok(()) = app.update_board_from_spec() {
                 app.state = CalibrationStep::PickVideos;
             }
@@ -147,6 +147,14 @@ fn align_video_screen(app: &mut CalibrationApp, ui: &mut Ui) {
     let total = app.video_players.len();
 
     for (i, vp) in app.video_players.iter().enumerate() {
+        if !app.draw_charuco_results {
+            set_color_image_to_texture_handle(
+                vp.dynamic_image(),
+                &mut app.video_texture_handles[i],
+            );
+            continue;
+        }
+
         let should_detect: bool = match &app.last_detected_frame_with_charuco[i] {
             Some(cached) if cached.frame == vp.current_frame() => match &cached.charuco_data {
                 Some(detection_res) => {
@@ -173,16 +181,6 @@ fn align_video_screen(app: &mut CalibrationApp, ui: &mut Ui) {
             let gray_img = vp.dynamic_image().to_luma8();
             let detection_result = get_charuco_marker_first(&app.charuco_board, &gray_img);
 
-            log::debug!(
-                "Видео {}: размер кадра {}x{}, grey {}x{}, aspect_ratio={:.2}",
-                i,
-                vp.dynamic_image().width(),
-                vp.dynamic_image().height(),
-                vp.dynamic_image().width(),
-                vp.dynamic_image().height(),
-                vp.dynamic_image().width() as f32 / vp.dynamic_image().height() as f32
-            );
-
             match &detection_result {
                 Some(detection_res) => {
                     let img_with_charuco =
@@ -207,37 +205,39 @@ fn align_video_screen(app: &mut CalibrationApp, ui: &mut Ui) {
             });
         }
     }
-
-    Frame::NONE.show(ui, |ui| {
-        let num_columns = ((total as f32).sqrt().ceil() as usize).min(total);
-        let num_rows = (total + num_columns - 1) / num_columns;
-        let cell_width = ui.available_width() / num_columns as f32 - PADDING / 2.0;
-        let cell_height = ui.available_height() / num_rows as f32 - PADDING / 2.0;
-        let cell_size = vec2(cell_width, cell_height);
-        Grid::new("video_grid")
-            .spacing(vec2(PADDING, PADDING))
-            .num_columns(num_columns)
-            .min_col_width(cell_width)
-            .min_row_height(cell_height)
-            .max_col_width(cell_width)
-            .show(ui, |ui| {
-                for (i, player) in app.video_players.iter_mut().enumerate() {
-                    render_video_card(player, &app.video_texture_handles[i], ui, cell_size);
-                    if (i + 1) % num_columns == 0 && i + 1 < total {
-                        ui.end_row();
+    eframe::egui::CentralPanel::default().show_inside(ui, |ui| {
+        Frame::NONE.show(ui, |ui| {
+            let num_columns = ((total as f32).sqrt().ceil() as usize).min(total);
+            let num_rows = (total + num_columns - 1) / num_columns;
+            let cell_width = ui.available_width() / num_columns as f32 - PADDING / 2.0;
+            let cell_height = ui.available_height() / num_rows as f32 - PADDING / 2.0;
+            let cell_size = vec2(cell_width, cell_height);
+            Grid::new("video_grid")
+                .spacing(vec2(PADDING, PADDING))
+                .num_columns(num_columns)
+                .min_col_width(cell_width)
+                .min_row_height(cell_height)
+                .max_col_width(cell_width)
+                .show(ui, |ui| {
+                    for (i, player) in app.video_players.iter_mut().enumerate() {
+                        render_video_card(player, &app.video_texture_handles[i], ui, cell_size);
+                        if (i + 1) % num_columns == 0 && i + 1 < total {
+                            ui.end_row();
+                        }
                     }
-                }
-            });
-    });
-    if ui.button("Начать калибровку").clicked() {
-        app.offset_in_seconds = app
-            .video_players
-            .iter()
-            .map(|vid| vid.current_time_in_seconds)
-            .collect();
+                });
+        });
+        ui.checkbox(&mut app.draw_charuco_results, "Рисовать ChAruco маркеры");
+        if ui.button("Начать калибровку").clicked() {
+            app.offset_in_seconds = app
+                .video_players
+                .iter()
+                .map(|vid| vid.current_time_in_seconds)
+                .collect();
 
-        app.state = CalibrationStep::Calibration;
-    }
+            app.state = CalibrationStep::Calibration;
+        }
+    });
 }
 
 fn render_video_card(
@@ -327,25 +327,27 @@ fn render_video_path(app: &mut CalibrationApp, ui: &mut Ui, path: &PathBuf) {
 }
 
 fn pick_videos_screen(app: &mut CalibrationApp, ui: &mut Ui) {
-    ui.vertical_centered(|ui| {
-        if app.num_cameras() == 0 {
-            ui.label("Выберите видео калибровок, чтобы начать");
-        }
-
-        for vid in &app.video_paths.clone() {
-            render_video_path(app, ui, vid);
-        }
-
-        if ui.button("Добавить видео").clicked() {
-            select_videos(app);
-        };
-
-        let to_align_button = Button::new("Перейти к синхронизации видео");
-        if app.video_paths.len() >= 2 {
-            if ui.add(to_align_button).clicked() {
-                app.state = CalibrationStep::AlignVideos;
+    eframe::egui::CentralPanel::default().show_inside(ui, |ui| {
+        ui.vertical_centered(|ui| {
+            if app.num_cameras() == 0 {
+                ui.label("Выберите видео калибровок, чтобы начать");
             }
-        }
+
+            for vid in &app.video_paths.clone() {
+                render_video_path(app, ui, vid);
+            }
+
+            if ui.button("Добавить видео").clicked() {
+                select_videos(app);
+            };
+
+            let to_align_button = Button::new("Перейти к синхронизации видео");
+            if app.video_paths.len() >= 2 {
+                if ui.add(to_align_button).clicked() {
+                    app.state = CalibrationStep::AlignVideos;
+                }
+            }
+        });
     });
 }
 

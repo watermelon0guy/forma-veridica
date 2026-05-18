@@ -13,10 +13,11 @@ use rayon::prelude::*;
 use std::collections::HashMap;
 
 use nalgebra::Point2;
+
 // После find_marker_quads: удалить quads с почти совпадающими центрами
 fn dedup_quads(quads: &mut Vec<[Point2<f32>; 4]>, min_dist: f32) {
     let mut kept = Vec::new();
-    for quad in quads.clone() {
+    for quad in quads.drain(..) {
         let center = quad.iter().fold(Point2::origin(), |a, p| a + p.coords) / 4.0;
         if kept.iter().all(|k: &[Point2<f32>; 4]| {
             let kc = k.iter().fold(Point2::origin(), |a, p| a + p.coords) / 4.0;

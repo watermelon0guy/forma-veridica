@@ -28,6 +28,7 @@ pub(crate) struct CalibrationApp {
     pub(crate) charuco_board: CharucoBoard,
     pub(crate) charuco_board_texture_handle: Option<TextureHandle>,
     pub(crate) last_detected_frame_with_charuco: Vec<Option<FrameWithCharucoData>>,
+    pub(crate) draw_charuco_results: bool,
 }
 
 pub(crate) struct FrameWithCharucoData {
@@ -67,6 +68,7 @@ impl Default for CalibrationApp {
             charuco_board_texture_handle: None,
             charuco_target_spec,
             last_detected_frame_with_charuco: Vec::new(),
+            draw_charuco_results: false,
         }
     }
 }
