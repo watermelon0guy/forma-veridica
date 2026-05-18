@@ -29,6 +29,160 @@ fn dedup_quads(quads: &mut Vec<[Point2<f32>; 4]>, min_dist: f32) {
     *quads = kept;
 }
 
+/// Билинейная интерполяция значения пикселя в субпиксельных координатах.
+fn interpolate_pixel(gray: &GrayImage, x: f32, y: f32) -> f32 {
+    let x0 = x.floor() as i32;
+    let y0 = y.floor() as i32;
+    let x1 = x0 + 1;
+    let y1 = y0 + 1;
+
+    let wx = x - x0 as f32;
+    let wy = y - y0 as f32;
+
+    let x0 = x0.clamp(0, gray.width() as i32 - 1) as u32;
+    let y0 = y0.clamp(0, gray.height() as i32 - 1) as u32;
+    let x1 = x1.clamp(0, gray.width() as i32 - 1) as u32;
+    let y1 = y1.clamp(0, gray.height() as i32 - 1) as u32;
+
+    let i00 = gray.get_pixel(x0, y0).0[0] as f32;
+    let i01 = gray.get_pixel(x0, y1).0[0] as f32;
+    let i10 = gray.get_pixel(x1, y0).0[0] as f32;
+    let i11 = gray.get_pixel(x1, y1).0[0] as f32;
+
+    let i0 = i00 * (1.0 - wy) + i01 * wy;
+    let i1 = i10 * (1.0 - wy) + i11 * wy;
+
+    i0 * (1.0 - wx) + i1 * wx
+}
+
+/// Sub-pixel уточнение угла по алгоритму OpenCV cornerSubPix.
+/// Решает систему уравнений на основе градиентов с Гауссовым взвешиванием.
+fn refine_corner(
+    gray: &GrayImage,
+    pt: &mut Point2<f32>,
+    win_size: u32,
+    zero_zone: i32,
+    max_iters: usize,
+    eps: f32,
+) {
+    let win_w = (win_size * 2 + 1) as usize;
+    let win_h = win_w;
+    let win = win_size as i32;
+
+    // Создаём Гауссову маску
+    let mut mask: Vec<f32> = vec![0.0; win_w * win_h];
+    for i in 0..win_h {
+        let y = (i as f32 - win as f32) / win as f32;
+        let vy = (-y * y).exp();
+        for j in 0..win_w {
+            let x = (j as f32 - win as f32) / win as f32;
+            mask[i * win_w + j] = vy * (-x * x).exp();
+        }
+    }
+
+    // Применяем zero_zone (мертвую зону в центре)
+    if zero_zone >= 0 {
+        let zz = zero_zone as usize;
+        for i in (win as usize - zz)..=(win as usize + zz) {
+            for j in (win as usize - zz)..=(win as usize + zz) {
+                if i < win_h && j < win_w {
+                    mask[i * win_w + j] = 0.0;
+                }
+            }
+        }
+    }
+
+    let c_initial = *pt;
+    let mut c_current = *pt;
+
+    for _ in 0..max_iters {
+        // Буфер для субпиксельной интерполяции (окно + 2 для градиентов)
+        let buf_w = win_w + 2;
+        let buf_h = win_h + 2;
+        let mut subpix_buf: Vec<f32> = vec![0.0; buf_w * buf_h];
+
+        // Заполняем буфер через билинейную интерполяцию
+        for i in 0..buf_h {
+            for j in 0..buf_w {
+                let y = c_current.y + (i as f32 - win as f32 - 1.0);
+                let x = c_current.x + (j as f32 - win as f32 - 1.0);
+                subpix_buf[i * buf_w + j] = interpolate_pixel(gray, x, y);
+            }
+        }
+
+        // Вычисляем градиенты и накапливаем систему уравнений
+        let mut a = 0.0f64; // Σ(gx² * mask)
+        let mut b = 0.0f64; // Σ(gx*gy * mask)
+        let mut c = 0.0f64; // Σ(gy² * mask)
+        let mut bb1 = 0.0f64;
+        let mut bb2 = 0.0f64;
+
+        for i in 0..win_h {
+            let py = i as f32 - win as f32;
+            for j in 0..win_w {
+                let px = j as f32 - win as f32;
+                let idx = (i + 1) * buf_w + (j + 1);
+
+                // Центральные разности для градиентов
+                let tgx = subpix_buf[idx + 1] - subpix_buf[idx - 1];
+                let tgy = subpix_buf[idx + buf_w] - subpix_buf[idx - buf_w];
+
+                let m = mask[i * win_w + j] as f64;
+                let gxx = (tgx * tgx) as f64 * m;
+                let gxy = (tgx * tgy) as f64 * m;
+                let gyy = (tgy * tgy) as f64 * m;
+
+                a += gxx;
+                b += gxy;
+                c += gyy;
+
+                bb1 += gxx * px as f64 + gxy * py as f64;
+                bb2 += gxy * px as f64 + gyy * py as f64;
+            }
+        }
+
+        // Решаем систему 2×2
+        let det = a * c - b * b;
+        if det.abs() <= f64::EPSILON * f64::EPSILON {
+            break;
+        }
+
+        let scale = 1.0 / det;
+        let c_new = Point2::new(
+            (c_current.x as f64 + c * scale * bb1 - b * scale * bb2) as f32,
+            (c_current.y as f64 - b * scale * bb1 + a * scale * bb2) as f32,
+        );
+
+        // Проверяем сходимость
+        let err = (c_new.x - c_current.x).powi(2) + (c_new.y - c_current.y).powi(2);
+
+        // Проверяем выход за границы изображения
+        if c_new.x < 0.0
+            || c_new.x >= gray.width() as f32
+            || c_new.y < 0.0
+            || c_new.y >= gray.height() as f32
+        {
+            break;
+        }
+
+        c_current = c_new;
+
+        if err < eps * eps {
+            break;
+        }
+    }
+
+    // Проверяем, не ушли ли слишком далеко от начальной точки
+    if (c_current.x - c_initial.x).abs() > win as f32
+        || (c_current.y - c_initial.y).abs() > win as f32
+    {
+        // Плохая сходимость, возвращаем начальную точку
+        return;
+    }
+
+    *pt = c_current;
+}
+
 pub fn detect_aruco_markers(
     img: &GrayImage,
     dict: &calib_targets::aruco::Dictionary,
@@ -47,6 +201,12 @@ pub fn detect_aruco_markers(
     }
 
     dedup_quads(&mut quads, 5.0);
+
+    for quad in &mut quads {
+        for corner in quad.iter_mut() {
+            refine_corner(&img, corner, 5, -1, 30, 0.1);
+        }
+    }
 
     let cells: Vec<MarkerCell> = quads
         .iter()
