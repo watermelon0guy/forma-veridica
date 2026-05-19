@@ -200,7 +200,6 @@ pub fn calibrate_multiple_with_charuco_from_images(
     Ok(result)
 }
 
-// lib_cv/src/calibration.rs
 pub fn update_rigs(
     rigs: &mut Vec<RigView<NoMeta>>,
     cams_imgs: Vec<GrayImage>,

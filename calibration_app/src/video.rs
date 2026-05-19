@@ -116,6 +116,14 @@ impl VideoPlayer {
     pub(crate) fn dynamic_image(&self) -> &DynamicImage {
         &self.color_image
     }
+
+    pub(crate) fn _frame_rate(&self) -> f32 {
+        self.frame_rate
+    }
+
+    pub(crate) fn total_frames(&self) -> u64 {
+        self.total_frames
+    }
 }
 
 fn frame_to_color_image(

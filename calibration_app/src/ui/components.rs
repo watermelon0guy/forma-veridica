@@ -67,7 +67,7 @@ pub fn render_video_card_with_buttons(
     });
 }
 
-pub fn render_video_card(
+pub fn _render_video_card(
     video_player: &mut VideoPlayer,
     texture_handle: &TextureHandle,
     ui: &mut Ui,
@@ -90,7 +90,7 @@ pub fn render_video_card(
                             - ui.spacing().interact_size.x
                             - ui.spacing().item_spacing.x;
 
-                        let slider_response = ui.add(Slider::new(
+                        ui.add(Slider::new(
                             &mut video_player.current_time_in_seconds,
                             0.0..=duration_in_seconds,
                         ));

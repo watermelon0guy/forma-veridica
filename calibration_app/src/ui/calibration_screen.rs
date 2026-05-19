@@ -1,43 +1,74 @@
-use eframe::egui::Ui;
-use lib_cv::calibration::{calibrate_multiple_with_charuco_from_rigs, update_rigs};
-use log::{debug, error, info};
-use vision_calibration::core::{NoMeta, RigView};
+use eframe::egui::{ProgressBar, Ui};
 
 use crate::app::CalibrationApp;
 
+use std::sync::mpsc::TryRecvError;
+
 pub fn calibration_screen(app: &mut CalibrationApp, ui: &mut Ui) {
-    let mut img_rigs: Vec<RigView<NoMeta>> = Vec::new();
+    if app.calibration_thread.is_none()
+        && app.calibration_result_rx.is_none()
+        && app.calibration_result.is_none()
+    {
+        app.start_calibration_thread();
+    }
 
-    for (i, player) in app.video_players.iter_mut().enumerate() {
-        if let Err(e) = player.seek_to_time(app.offset_in_seconds[i]) {
-            error!("Ошибка перехода к офсету: {}", e);
-            return;
+    if let Some(ref rx) = app.calibration_result_rx {
+        match rx.try_recv() {
+            Ok(Ok(result)) => {
+                app.calibration_result = Some(result);
+                app.calibration_thread = None;
+                app.calibration_result_rx = None;
+            }
+            Ok(Err(_)) => {
+                // При ошибке тоже чистим
+                app.calibration_thread = None;
+                app.calibration_result_rx = None;
+            }
+            Err(TryRecvError::Empty) => {
+                // Ещё работает - продолжаем ждать
+            }
+            Err(TryRecvError::Disconnected) => {
+                app.calibration_thread = None;
+                app.calibration_result_rx = None;
+            }
         }
     }
 
-    let mut reading_vids = true;
-    while reading_vids {
-        let mut cams_imgs = Vec::new();
-        for player in &mut app.video_players {
-            debug!(
-                "Кадр:{}, время: {}",
-                player.current_frame(),
-                player.current_time_in_seconds
-            );
-            cams_imgs.push(player.dynamic_image().to_luma8());
-            if let Err(_) = &player.rewind_forward(20) {
-                info!("Видео закончилось");
-                reading_vids = false;
-            };
-        }
-        if reading_vids {
-            update_rigs(&mut img_rigs, cams_imgs, &app.charuco_board, 2, 8);
-        }
-    }
+    ui.vertical_centered(|ui| {
+        ui.add_space(50.0);
 
-    match calibrate_multiple_with_charuco_from_rigs(img_rigs) {
-        Ok(res) => debug!("{res:?}"),
-        Err(e) => error!("Неудаяная калибровка: {e}"),
-    }
-    todo!()
+        if app.calibration_thread.is_some() || app.calibration_result_rx.is_some() {
+            // Калибровка идёт
+            ui.heading("Выполняется калибровка...");
+            ui.add_space(30.0);
+
+            let progress = app.calibration_progress.lock().unwrap();
+
+            let progress_bar = ProgressBar::new(progress.percent)
+                .text(format!("{:.0}%", progress.percent * 100.0))
+                .animate(true) // анимация полоски
+                .desired_width(400.0);
+
+            ui.add(progress_bar);
+        } else if let Some(ref _result) = app.calibration_result {
+            // Калибровка завершена
+            ui.heading("Калибровка завершена!");
+            ui.add_space(30.0);
+
+            if ui.button("Сохранить результат").clicked() {
+                if let Some(ref result) = app.calibration_result {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("yaml", &["yml", "yaml"])
+                        .save_file()
+                    {
+                        if let Ok(yaml) = serde_yml::to_string(result) {
+                            let _ = std::fs::write(&path.with_extension("yaml"), yaml);
+                        }
+                    }
+                }
+            }
+        } else {
+            ui.heading("Подготовка...");
+        }
+    });
 }

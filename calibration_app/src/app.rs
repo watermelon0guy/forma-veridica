@@ -13,6 +13,8 @@ use eframe::{
     egui::{Context, TextureHandle, TextureOptions},
 };
 use image::load_from_memory;
+use lib_cv::calibration::{calibrate_multiple_with_charuco_from_rigs, update_rigs};
+use log::{debug, error, info};
 use vision_calibration::{
     core::{NoMeta, RigView},
     rig_extrinsics::RigExtrinsicsExport,
@@ -39,6 +41,7 @@ pub(crate) struct CalibrationApp {
     pub(crate) calibration_progress: Arc<Mutex<CalibrationProgress>>,
     pub(crate) calibration_result_rx: Option<mpsc::Receiver<Result<RigExtrinsicsExport, String>>>,
     pub(crate) calibration_thread: Option<std::thread::JoinHandle<()>>,
+    pub(crate) calibration_result: Option<RigExtrinsicsExport>,
 }
 
 #[derive(Default)]
@@ -88,6 +91,7 @@ impl Default for CalibrationApp {
             calibration_progress: Default::default(),
             calibration_result_rx: None,
             calibration_thread: None,
+            calibration_result: None,
         }
     }
 }
@@ -136,7 +140,48 @@ impl CalibrationApp {
         Ok(())
     }
 
-    pub(crate) fn _perform_calibration() {}
+    pub(crate) fn start_calibration_thread(&mut self) {
+        let progress = Arc::clone(&self.calibration_progress);
+
+        // Создаём канал для результата
+        let (tx, rx) = mpsc::channel();
+        self.calibration_result_rx = Some(rx);
+
+        // Берём данные для калибровки
+        let video_paths = self.video_paths.clone();
+        let charuco_board = self.charuco_board.clone();
+        let offsets = self.offset_in_seconds.clone();
+
+        // Запускаем поток
+        let handle = std::thread::spawn(move || {
+            // Устанавливаем начальный статус
+            {
+                let mut p = progress.lock().unwrap();
+                p.is_running = true;
+                p.percent = 0.0;
+            }
+
+            // Вызываем тяжёлую функцию калибровки
+            let result = run_calibration_in_thread(
+                video_paths.clone(),
+                charuco_board,
+                offsets,
+                Arc::clone(&progress),
+                // ctx, // для request_repaint()
+            );
+
+            // Отправляем результат назад
+            let _ = tx.send(result);
+
+            // Отмечаем завершение
+            {
+                let mut p = progress.lock().unwrap();
+                p.is_running = false;
+            }
+        });
+
+        self.calibration_thread = Some(handle);
+    }
 }
 
 impl App for CalibrationApp {
@@ -158,4 +203,57 @@ pub(crate) fn charuco_target_spec_to_dynamic_image(
     // Рендерим - получаем PNG байты, SVG и JSON
     let bundle = render_target_bundle(&document)?;
     Ok(load_from_memory(&bundle.png_bytes)?)
+}
+
+fn run_calibration_in_thread(
+    video_paths: Vec<PathBuf>,
+    charuco_board: CharucoBoard,
+    offsets: Vec<f64>,
+    progress: Arc<Mutex<CalibrationProgress>>,
+    // ctx: Context,
+) -> Result<RigExtrinsicsExport, String> {
+    let mut img_rigs: Vec<RigView<NoMeta>> = Vec::new();
+
+    let mut video_players: Vec<VideoPlayer> = Vec::new();
+    for path in &video_paths {
+        match VideoPlayer::new(path) {
+            Ok(vp) => video_players.push(vp),
+            Err(e) => return Err(format!("Проблема при создании плеера: {e}").into()),
+        }
+    }
+
+    for (i, player) in video_players.iter_mut().enumerate() {
+        if let Err(e) = player.seek_to_time(offsets[i]) {
+            error!("Ошибка перехода к офсету: {}", e);
+            return Err(format!("Проблема при создании плеера: {e}").into());
+        }
+    }
+
+    let total_frames = video_players[0].total_frames();
+
+    let mut reading_vids = true;
+    while reading_vids {
+        let mut cams_imgs = Vec::new();
+        for player in &mut video_players {
+            debug!(
+                "Кадр:{}, время: {}",
+                player.current_frame(),
+                player.current_time_in_seconds
+            );
+            if reading_vids {
+                let mut p = progress.lock().unwrap();
+                p.percent = player.current_frame() as f32 / total_frames as f32;
+            }
+            cams_imgs.push(player.dynamic_image().to_luma8());
+            if let Err(_) = &player.rewind_forward(20) {
+                info!("Видео закончилось");
+                reading_vids = false;
+            };
+        }
+        if reading_vids {
+            update_rigs(&mut img_rigs, cams_imgs, &charuco_board, 2, 8);
+        }
+    }
+
+    calibrate_multiple_with_charuco_from_rigs(img_rigs).map_err(|e| e.to_string())
 }

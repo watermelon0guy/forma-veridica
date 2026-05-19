@@ -14,3 +14,4 @@ video-rs = { workspace = true }
 vision-calibration = { workspace = true }
 calib-targets = { workspace = true }
 image = { workspace = true }
+serde_yml = { workspace = true }
