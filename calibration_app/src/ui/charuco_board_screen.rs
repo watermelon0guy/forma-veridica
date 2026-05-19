@@ -7,10 +7,8 @@ use calib_targets::{
 use eframe::egui::{ComboBox, Panel, Slider, SliderClamping, TextureOptions, Ui};
 use image::DynamicImage;
 
-use crate::{
-    app::{CalibrationApp, CalibrationStep, charuco_target_spec_to_dynamic_image},
-    video::{dynamic_image_to_color_image, set_color_image_to_texture_handle},
-};
+use crate::app::{CalibrationApp, CalibrationStep, charuco_target_spec_to_dynamic_image};
+use lib_cv::video::{dynamic_image_to_color_image, set_color_image_to_texture_handle};
 
 pub fn charuco_board_screen(app: &mut CalibrationApp, ui: &mut Ui) {
     let dict_len = app.charuco_target_spec.dictionary.codes.len() as u32;

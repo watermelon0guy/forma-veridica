@@ -4,10 +4,10 @@ use eframe::egui::{ColorImage, TextureHandle, TextureOptions};
 use image::DynamicImage;
 use video_rs::{Decoder, Time, frame::Frame};
 
-pub(crate) struct VideoPlayer {
+pub struct VideoPlayer {
     decoder: Decoder,
     current_frame: u64,
-    pub(crate) current_time_in_seconds: f64,
+    pub current_time_in_seconds: f64,
     total_frames: u64,
     duration: Time,
     frame_rate: f32,
@@ -15,7 +15,7 @@ pub(crate) struct VideoPlayer {
 }
 
 impl VideoPlayer {
-    pub(crate) fn new(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
         let decoder = Decoder::new(path)?;
 
         let frame_rate = decoder.frame_rate();
@@ -36,7 +36,7 @@ impl VideoPlayer {
         Ok(player)
     }
 
-    pub(crate) fn rewind_forward(&mut self, amount: u64) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn rewind_forward(&mut self, amount: u64) -> Result<(), Box<dyn std::error::Error>> {
         if self.current_frame + amount < self.total_frames - 1 {
             self.current_frame += amount;
             self.seek_to_frame(self.current_frame as u64)?;
@@ -47,10 +47,7 @@ impl VideoPlayer {
         Ok(())
     }
 
-    pub(crate) fn rewind_backward(
-        &mut self,
-        amount: u64,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn rewind_backward(&mut self, amount: u64) -> Result<(), Box<dyn std::error::Error>> {
         if self.current_frame - amount > 0 {
             self.current_frame -= amount;
             self.seek_to_frame(self.current_frame as u64)?;
@@ -61,7 +58,7 @@ impl VideoPlayer {
         Ok(())
     }
 
-    pub(crate) fn seek_to_time(&mut self, seconds: f64) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn seek_to_time(&mut self, seconds: f64) -> Result<(), Box<dyn std::error::Error>> {
         let duration = self.duration;
         if seconds < duration.as_secs_f64() {
             self.decoder.seek((seconds * 1000.0) as i64)?;
@@ -70,7 +67,7 @@ impl VideoPlayer {
         Ok(())
     }
 
-    pub(crate) fn seek_to_frame(&mut self, frame: u64) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn seek_to_frame(&mut self, frame: u64) -> Result<(), Box<dyn std::error::Error>> {
         if frame < self.total_frames {
             let time = (frame as f64 / self.frame_rate as f64 * 1000.0) as i64;
             self.decoder.seek(time)?;
@@ -80,7 +77,7 @@ impl VideoPlayer {
         Ok(())
     }
 
-    pub(crate) fn update_frame(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn update_frame(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let (_, frame) = match self.decoder.decode() {
             Ok(f) => f,
             Err(e) => return Err(format!("Проблема в декодировании кадра: {e}").into()),
@@ -90,38 +87,38 @@ impl VideoPlayer {
         Ok(())
     }
 
-    pub(crate) fn size(&self) -> (u32, u32) {
+    pub fn size(&self) -> (u32, u32) {
         self.decoder.size()
     }
 
-    pub(crate) fn length_in_seconds(&self) -> f64 {
+    pub fn length_in_seconds(&self) -> f64 {
         self.duration.as_secs_f64()
     }
 
-    pub(crate) fn update_current_time_from_frame(&mut self) {
+    pub fn update_current_time_from_frame(&mut self) {
         self.current_time_in_seconds = self.current_frame as f64 / self.frame_rate as f64;
     }
 
-    pub(crate) fn update_current_frame_from_time_in_seconds(&mut self, seconds: f64) {
+    pub fn update_current_frame_from_time_in_seconds(&mut self, seconds: f64) {
         self.current_frame = (seconds as f64 * self.frame_rate as f64) as u64;
         if self.current_frame >= self.total_frames {
             self.current_frame = self.total_frames.saturating_sub(1);
         }
     }
 
-    pub(crate) fn current_frame(&self) -> u64 {
+    pub fn current_frame(&self) -> u64 {
         self.current_frame
     }
 
-    pub(crate) fn dynamic_image(&self) -> &DynamicImage {
+    pub fn dynamic_image(&self) -> &DynamicImage {
         &self.color_image
     }
 
-    pub(crate) fn _frame_rate(&self) -> f32 {
+    pub fn _frame_rate(&self) -> f32 {
         self.frame_rate
     }
 
-    pub(crate) fn total_frames(&self) -> u64 {
+    pub fn total_frames(&self) -> u64 {
         self.total_frames
     }
 }
@@ -140,7 +137,7 @@ fn frame_to_color_image(
     Ok(DynamicImage::ImageRgb8(rgb_image))
 }
 
-pub(crate) fn set_color_image_to_texture_handle(
+pub fn set_color_image_to_texture_handle(
     color_image: &DynamicImage,
     texture_handle: &mut TextureHandle,
 ) {
@@ -150,7 +147,7 @@ pub(crate) fn set_color_image_to_texture_handle(
     );
 }
 
-pub(crate) fn dynamic_image_to_color_image(img: &DynamicImage) -> ColorImage {
+pub fn dynamic_image_to_color_image(img: &DynamicImage) -> ColorImage {
     let size = [img.width() as usize, img.height() as usize];
     let rgb = img.to_rgb8();
     ColorImage::from_rgb(size, rgb.as_raw())

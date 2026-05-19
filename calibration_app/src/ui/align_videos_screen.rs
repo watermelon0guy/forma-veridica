@@ -5,8 +5,8 @@ use log::warn;
 use crate::{
     app::{CalibrationApp, CalibrationStep, FrameWithCharucoData},
     ui::{PADDING, components::render_video_card_with_buttons},
-    video::set_color_image_to_texture_handle,
 };
+use lib_cv::video::set_color_image_to_texture_handle;
 
 pub fn align_video_screen(app: &mut CalibrationApp, ui: &mut Ui) {
     if let Err(e) = app.init_videos(ui.ctx()) {

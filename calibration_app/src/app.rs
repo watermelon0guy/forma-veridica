@@ -20,10 +20,8 @@ use vision_calibration::{
     rig_extrinsics::RigExtrinsicsExport,
 };
 
-use crate::{
-    ui::render_content,
-    video::{VideoPlayer, dynamic_image_to_color_image},
-};
+use crate::ui::render_content;
+use lib_cv::video::{VideoPlayer, dynamic_image_to_color_image};
 
 pub(crate) struct CalibrationApp {
     pub(crate) video_paths: Vec<PathBuf>,

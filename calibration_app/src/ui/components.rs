@@ -1,4 +1,5 @@
-use crate::{ui::PADDING, video::VideoPlayer};
+use crate::ui::PADDING;
+use lib_cv::video::VideoPlayer;
 
 use eframe::egui::{Align, Frame, Image, Layout, Slider, TextureHandle, Ui, Vec2};
 use log::error;
