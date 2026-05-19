@@ -1,4 +1,7 @@
-use std::path::PathBuf;
+use std::{
+    path::PathBuf,
+    sync::{Arc, Mutex, mpsc},
+};
 
 use calib_targets::{
     aruco::builtins::DICT_6X6_100,
@@ -10,7 +13,10 @@ use eframe::{
     egui::{Context, TextureHandle, TextureOptions},
 };
 use image::load_from_memory;
-use vision_calibration::core::{NoMeta, RigView};
+use vision_calibration::{
+    core::{NoMeta, RigView},
+    rig_extrinsics::RigExtrinsicsExport,
+};
 
 use crate::{
     ui::render_content,
@@ -29,6 +35,16 @@ pub(crate) struct CalibrationApp {
     pub(crate) charuco_board_texture_handle: Option<TextureHandle>,
     pub(crate) last_detected_frame_with_charuco: Vec<Option<FrameWithCharucoData>>,
     pub(crate) draw_charuco_results: bool,
+
+    pub(crate) calibration_progress: Arc<Mutex<CalibrationProgress>>,
+    pub(crate) calibration_result_rx: Option<mpsc::Receiver<Result<RigExtrinsicsExport, String>>>,
+    pub(crate) calibration_thread: Option<std::thread::JoinHandle<()>>,
+}
+
+#[derive(Default)]
+pub(crate) struct CalibrationProgress {
+    pub(crate) percent: f32,
+    pub(crate) is_running: bool,
 }
 
 pub(crate) struct FrameWithCharucoData {
@@ -69,6 +85,9 @@ impl Default for CalibrationApp {
             charuco_target_spec,
             last_detected_frame_with_charuco: Vec::new(),
             draw_charuco_results: false,
+            calibration_progress: Default::default(),
+            calibration_result_rx: None,
+            calibration_thread: None,
         }
     }
 }

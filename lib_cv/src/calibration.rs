@@ -118,7 +118,7 @@ fn correspondence_view_from_charuco(
     charuco_board: &CharucoBoard,
     img: &image::ImageBuffer<image::Luma<u8>, Vec<u8>>,
 ) -> Option<CorrespondenceView> {
-    let charuco_detection = match get_charuco_grid_first(charuco_board, img) {
+    let charuco_detection = match get_charuco_marker_first(charuco_board, img) {
         Some(charuco_det) => charuco_det,
         None => {
             warn!("Error in charuco detection");
@@ -200,10 +200,13 @@ pub fn calibrate_multiple_with_charuco_from_images(
     Ok(result)
 }
 
+// lib_cv/src/calibration.rs
 pub fn update_rigs(
     rigs: &mut Vec<RigView<NoMeta>>,
     cams_imgs: Vec<GrayImage>,
     charuco_board: &CharucoBoard,
+    min_correspondences: usize,
+    min_point_in_correspondence: usize,
 ) {
     let mut correspondences = Vec::new();
     let num_cameras = cams_imgs.len();
@@ -214,14 +217,25 @@ pub fn update_rigs(
         ));
     }
 
-    let rig_view = RigView {
-        obs: RigViewObs {
-            cameras: correspondences,
-        },
-        meta: NoMeta,
-    };
+    for opt_cv in &correspondences {
+        if let Some(cv) = opt_cv {
+            if cv.len() < min_point_in_correspondence {
+                return;
+            }
+        }
+    }
 
-    rigs.push(rig_view);
+    // Добавляем риг только если есть данные минимум с 2 камер
+    let valid_cams = correspondences.iter().filter(|c| c.is_some()).count();
+    if valid_cams >= min_correspondences {
+        let rig_view = RigView {
+            obs: RigViewObs {
+                cameras: correspondences,
+            },
+            meta: NoMeta,
+        };
+        rigs.push(rig_view);
+    }
 }
 
 pub fn calibrate_multiple_with_charuco_from_rigs(
