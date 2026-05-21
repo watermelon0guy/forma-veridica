@@ -41,19 +41,6 @@ impl ReconstructionApp {
         Self::default()
     }
 
-    fn select_videos(app: &mut ReconstructionApp) {
-        match rfd::FileDialog::new()
-            .set_title("Выбрать видео")
-            .add_filter("Видео", &["mp4", "avi"])
-            .pick_files()
-        {
-            Some(p) => {
-                app.video_paths = p;
-            }
-            None => return,
-        }
-    }
-
     pub(crate) fn num_cameras(&self) -> Option<usize> {
         match &self.calibration_data {
             Some(cd) => Some(cd.cameras.len()),
