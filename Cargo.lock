@@ -3207,7 +3207,9 @@ dependencies = [
  "log",
  "nalgebra 0.34.2",
  "ndarray 0.17.2",
+ "optical-flow-lk",
  "rayon",
+ "serde_yml",
  "sift-wgpu",
  "video-rs",
  "vision-calibration",
@@ -4293,6 +4295,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
+name = "optical-flow-lk"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c4a96b2c4322d10c92a4f39ad4fef62a159fc73abef74879b72e3c1e748d0758"
+dependencies = [
+ "image",
+ "nalgebra 0.34.2",
+]
+
+[[package]]
 name = "orbclient"
 version = "0.3.54"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5038,14 +5050,10 @@ version = "0.1.0"
 dependencies = [
  "eframe",
  "env_logger",
- "image",
  "lib_cv",
  "log",
- "nalgebra 0.34.2",
  "rfd",
  "serde",
- "serde_yml",
- "video-rs",
  "vision-calibration",
 ]
 

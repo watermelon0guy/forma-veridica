@@ -24,3 +24,4 @@ nalgebra = { version = "0.34.2", features = ["serde-serialize"] }
 ndarray = "0.17.2"
 imageproc = "0.26.2"
 rayon = "1.12.0"
+optical-flow-lk = "0.2.0"

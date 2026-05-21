@@ -5,8 +5,8 @@ mod ui;
 
 fn main() -> eframe::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn"))
-        .filter_module("reconstruction_app", log::LevelFilter::Info)
-        .filter_module("lib_cv", log::LevelFilter::Info)
+        .filter_module("reconstruction_app", log::LevelFilter::Debug)
+        .filter_module("lib_cv", log::LevelFilter::Debug)
         .init();
 
     let options = eframe::NativeOptions {

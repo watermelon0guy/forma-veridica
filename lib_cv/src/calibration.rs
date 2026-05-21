@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use calib_targets::{
     LabeledCorner, TargetDetection, TargetKind,
     aruco::MarkerDetection,
@@ -273,6 +275,15 @@ pub fn calibrate_multiple_with_charuco_from_rigs(
 
     Ok(result)
 }
+
+pub fn load_calibration_from_yaml(
+    path: &PathBuf,
+) -> Result<RigExtrinsicsExport, Box<dyn std::error::Error>> {
+    let yaml_str = std::fs::read_to_string(path)?;
+    let export: RigExtrinsicsExport = serde_yml::from_str(&yaml_str)?;
+    Ok(export)
+}
+
 /*
 
 // Функция для нахождения общих точек
