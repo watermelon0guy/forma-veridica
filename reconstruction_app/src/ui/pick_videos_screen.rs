@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use eframe::egui::{Align, Button, CentralPanel, Layout, RichText, Ui};
+use eframe::egui::{Align, Button, CentralPanel, Color32, Layout, RichText, Ui};
 
 use crate::app::{PipelineState, ReconstructionApp};
 
@@ -15,11 +15,34 @@ pub fn pick_videos_screen(app: &mut ReconstructionApp, ui: &mut Ui) {
                 select_videos(app);
             };
 
-            let to_align_button = Button::new("Перейти к калибровке");
-            if app.video_paths.len() >= 2 {
+            let num_cameras = match app.num_cameras() {
+                None => return,
+                Some(num_cameras) => num_cameras,
+            };
+
+            if app.video_paths.len() == num_cameras {
+                let to_align_button = Button::new("Перейти к калибровке");
                 if ui.add(to_align_button).clicked() {
                     app.state = PipelineState::ReadyToProcess;
                 }
+            } else if app.video_paths.len() < num_cameras {
+                ui.label(
+                    RichText::new(format!(
+                        "Выбрано слишком мало видео: нужно {}, выбрано {}",
+                        num_cameras,
+                        app.video_paths.len()
+                    ))
+                    .color(Color32::RED),
+                );
+            } else {
+                ui.label(
+                    RichText::new(format!(
+                        "Выбрано слишком много видео: нужно {}, выбрано {}",
+                        num_cameras,
+                        app.video_paths.len()
+                    ))
+                    .color(Color32::RED),
+                );
             }
         });
     });
