@@ -1,4 +1,4 @@
-use eframe::egui::{Button, RichText, Ui};
+use eframe::egui::{Button, CentralPanel, RichText, Ui};
 use lib_cv::calibration::load_calibration_from_yaml;
 use log::error;
 
@@ -23,31 +23,33 @@ fn pick_camera_parameters_file(
 }
 
 pub fn pick_calibration_screen(app: &mut ReconstructionApp, ui: &mut Ui) {
-    ui.vertical_centered(|ui| {
-        ui.heading("Параметры камер");
+    CentralPanel::default().show_inside(ui, |ui| {
+        ui.vertical_centered(|ui| {
+            ui.heading("Параметры камер");
 
-        match &app.calibration_data {
-            None => {
-                ui.label(RichText::new("Выберите файл с параметрами камер"));
-                let pick_button = Button::new(RichText::new("Выбрать"));
+            match &app.calibration_data {
+                None => {
+                    ui.label(RichText::new("Выберите файл с параметрами камер"));
+                    let pick_button = Button::new(RichText::new("Выбрать"));
 
-                if ui.add(pick_button).clicked() {
-                    pick_camera_parameters_file(app);
+                    if ui.add(pick_button).clicked() {
+                        let _ = pick_camera_parameters_file(app);
+                    }
+                }
+                Some(calib_data) => {
+                    let num_cameras = calib_data.cameras.len();
+                    ui.label(format!("В параметрах найдено камер: {num_cameras}"));
+                    let change_button = Button::new(RichText::new("Изменить параметры"));
+                    if ui.add(change_button).clicked() {
+                        let _ = pick_camera_parameters_file(app);
+                    }
+
+                    let continue_button = Button::new(RichText::new("Перейти к выбору видео"));
+                    if ui.add(continue_button).clicked() {
+                        app.state = PipelineState::PickVideos;
+                    }
                 }
             }
-            Some(calib_data) => {
-                let num_cameras = calib_data.cameras.len();
-                ui.label(format!("В параметрах найдено камер: {num_cameras}"));
-                let change_button = Button::new(RichText::new("Изменить параметры"));
-                if ui.add(change_button).clicked() {
-                    pick_camera_parameters_file(app);
-                }
-
-                let continue_button = Button::new(RichText::new("Перейти к выбору видео"));
-                if ui.add(continue_button).clicked() {
-                    app.state = PipelineState::PickVideos;
-                }
-            }
-        }
+        });
     });
 }
