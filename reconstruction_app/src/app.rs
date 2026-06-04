@@ -1,4 +1,5 @@
 use eframe::App;
+use eframe::egui::{TextureHandle, TextureOptions};
 use lib_cv::{
     reconstruction::{
         PointCloud, add_color_to_point_cloud, filter_point_cloud_by_confidence,
@@ -6,9 +7,9 @@ use lib_cv::{
         save_point_cloud, track_points_optical_flow_all, triangulate_points_multiple,
         undistort_points,
     },
-    video::VideoPlayer,
+    video::{VideoPlayer, dynamic_image_to_color_image},
 };
-use log::info;
+use log::{debug, info};
 use std::sync::mpsc;
 use vision_calibration::rig_extrinsics::RigExtrinsicsExport;
 
@@ -23,6 +24,10 @@ pub(crate) struct ReconstructionApp {
     pub pipeline_thread: Option<std::thread::JoinHandle<()>>,
     pub pipeline_result_rx: Option<mpsc::Receiver<Result<(), String>>>,
     pub pipeline_result: Option<Result<(), String>>,
+    // Для экрана выравнивания
+    pub video_players: Vec<VideoPlayer>,
+    pub video_texture_handles: Vec<TextureHandle>,
+    pub offsets: Vec<f64>,
 }
 
 impl Default for ReconstructionApp {
@@ -34,6 +39,9 @@ impl Default for ReconstructionApp {
             pipeline_thread: None,
             pipeline_result_rx: None,
             pipeline_result: None,
+            video_players: Vec::new(),
+            video_texture_handles: Vec::new(),
+            offsets: Vec::new(),
         }
     }
 }
@@ -43,6 +51,7 @@ pub(crate) enum PipelineState {
     #[default]
     PickCalibrationData,
     PickVideos,
+    AlignVideos,
     ReadyToProcess,
 }
 
@@ -64,15 +73,33 @@ impl ReconstructionApp {
         }
     }
 
+    pub(crate) fn init_videos(&mut self, ctx: &eframe::egui::Context) -> Result<(), String> {
+        if !self.video_players.is_empty() {
+            return Ok(());
+        }
+        for (i, path) in self.video_paths.iter().enumerate() {
+            let vp = VideoPlayer::new(path).map_err(|e| e.to_string())?;
+            let texture = ctx.load_texture(
+                format!("recon_video_{i}"),
+                dynamic_image_to_color_image(vp.dynamic_image()),
+                TextureOptions::default(),
+            );
+            self.video_players.push(vp);
+            self.video_texture_handles.push(texture);
+        }
+        Ok(())
+    }
+
     pub(crate) fn start_pipeline_thread(&mut self) {
         let (tx, rx) = mpsc::channel();
         self.pipeline_result_rx = Some(rx);
 
         let video_paths = self.video_paths.clone();
         let calib = self.calibration_data.clone();
+        let offsets = self.offsets.clone();
 
         let handle = std::thread::spawn(move || {
-            let result = run_pipeline_in_thread(video_paths, calib);
+            let result = run_pipeline_in_thread(video_paths, calib, offsets);
             let _ = tx.send(result);
         });
 
@@ -80,8 +107,12 @@ impl ReconstructionApp {
     }
 
     pub(crate) fn run_pipeline(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        run_pipeline_in_thread(self.video_paths.clone(), self.calibration_data.clone())
-            .map_err(|e| e.into())
+        run_pipeline_in_thread(
+            self.video_paths.clone(),
+            self.calibration_data.clone(),
+            self.offsets.clone(),
+        )
+        .map_err(|e| e.into())
     }
 }
 
@@ -89,6 +120,7 @@ impl ReconstructionApp {
 fn run_pipeline_in_thread(
     video_paths: Vec<PathBuf>,
     calib_data: Option<RigExtrinsicsExport>,
+    offsets: Vec<f64>,
 ) -> Result<(), String> {
     let calib = calib_data.ok_or("Нет данных калибровки")?;
     let num_cameras = calib.cameras.len();
@@ -100,6 +132,13 @@ fn run_pipeline_in_thread(
         .iter()
         .map(|p| VideoPlayer::new(p).map_err(|e| e.to_string()))
         .collect::<Result<_, _>>()?;
+
+    // Применяем смещения времени
+    for (i, p) in players.iter_mut().enumerate() {
+        if i < offsets.len() {
+            p.seek_to_time(offsets[i]).map_err(|e| e.to_string())?;
+        }
+    }
 
     let frame_step = 20u64;
 
@@ -116,7 +155,24 @@ fn run_pipeline_in_thread(
     // --- Undistortion ---
     let mut undistorted: Vec<Vec<_>> = Vec::with_capacity(num_cameras);
     for cam_i in 0..num_cameras {
+        // Диагностика первых точек камеры 0
+        if cam_i == 0 {
+            for pt_i in 0..points_2d[cam_i].len().min(3) {
+                debug!(
+                    "Точка {pt_i} камера 0: pixel=({:.1},{:.1})",
+                    points_2d[cam_i][pt_i].x, points_2d[cam_i][pt_i].y
+                );
+            }
+        }
         let undist = undistort_points(&points_2d[cam_i], &calib.cameras[cam_i]);
+        if cam_i == 0 {
+            for pt_i in 0..undist.len().min(3) {
+                debug!(
+                    "  после undistort: ({:.1},{:.1})",
+                    undist[pt_i].x, undist[pt_i].y
+                );
+            }
+        }
         undistorted.push(undist);
     }
 

@@ -1,8 +1,9 @@
-use kiddo::KdTree;
 use kiddo::SquaredEuclidean;
+use kiddo::immutable::float::kdtree::ImmutableKdTree;
 use log::{debug, error, info, warn};
 use nalgebra::{DMatrix, Matrix3x4, Point2, Point3, SVD};
 use sift::{KeyPoint, Sift};
+use std::num::NonZero;
 use vision_calibration::core::{Iso3, PinholeCamera};
 use vision_calibration::rig_extrinsics::RigExtrinsicsExport;
 
@@ -92,6 +93,44 @@ pub fn triangulate_points_multiple(
     debug!("Количество точек для триангуляции: {}", num_points);
 
     let projections = build_projection_matrices(camera_params);
+
+    // Диагностика: логируем параметры камер
+    for (i, cam) in camera_params.cameras.iter().enumerate() {
+        let k = cam.k.k_matrix();
+        let iso = camera_params.cam_se3_rig[i];
+        debug!(
+            "Камера {i}: fx={:.1} fy={:.1} cx={:.1} cy={:.1} dist=({:.4},{:.4},{:.4},{:.4},{:.4})",
+            k[(0, 0)],
+            k[(1, 1)],
+            k[(0, 2)],
+            k[(1, 2)],
+            cam.dist.k1,
+            cam.dist.k2,
+            cam.dist.k3,
+            cam.dist.p1,
+            cam.dist.p2
+        );
+        debug!(
+            "  rig->cam: t=({:.3},{:.3},{:.3}) R_angle={:.1}°",
+            iso.translation.x,
+            iso.translation.y,
+            iso.translation.z,
+            iso.rotation.angle().to_degrees()
+        );
+        debug!(
+            "  R matrix: [{:.3},{:.3},{:.3}; {:.3},{:.3},{:.3}; {:.3},{:.3},{:.3}]",
+            iso.rotation.to_rotation_matrix()[(0, 0)],
+            iso.rotation.to_rotation_matrix()[(0, 1)],
+            iso.rotation.to_rotation_matrix()[(0, 2)],
+            iso.rotation.to_rotation_matrix()[(1, 0)],
+            iso.rotation.to_rotation_matrix()[(1, 1)],
+            iso.rotation.to_rotation_matrix()[(1, 2)],
+            iso.rotation.to_rotation_matrix()[(2, 0)],
+            iso.rotation.to_rotation_matrix()[(2, 1)],
+            iso.rotation.to_rotation_matrix()[(2, 2)],
+        );
+    }
+
     let result = triangulate_points(points_2d, &projections);
 
     // Статистика по confidence
@@ -162,6 +201,13 @@ fn triangulate_points(
         let avg_error = total_error / num_cameras as f64;
         let confidence = (1.0 - (avg_error / 5.0).min(1.0)) as f32;
 
+        // Логируем первые 5 точек для диагностики
+        if pt_i < 5 {
+            debug!(
+                "Точка {pt_i}: 3D=({x:.2},{y:.2},{z:.2}) reproj_err={avg_error:.2}px conf={confidence:.2}"
+            );
+        }
+
         points_3d.push(PointContainer::new(Point3::new(x, y, z), confidence));
     }
 
@@ -187,7 +233,7 @@ fn to_fixed_array(v: &[f32]) -> [f32; SIFT_DIM] {
 }
 
 /// Детектирует SIFT-признаки на всех камерах и сопоставляет камеру 0 с каждой
-/// из остальных через KNN-поиск (k-d дерево) + Lowe's ratio test.
+/// из остальных через KNN-поиск (k-d дерево) + Lowe's ratio test + взаимная проверка.
 pub fn match_first_camera_features_to_all(
     images: &[image::DynamicImage],
 ) -> (
@@ -201,7 +247,15 @@ pub fn match_first_camera_features_to_all(
         return (vec![], vec![], vec![]);
     }
 
-    let sift = Sift::new(1.6, 4, 3, 0.5, 0.04, 10.0);
+    // Максимальное качество: низкий порог контраста, больше октав
+    let sift = Sift::new(
+        1.6,  // sigma
+        6,    // num_octaves — больше для лучшего покрытия масштабов
+        3,    // num_intervals
+        0.5,  // assumed_blur
+        0.01, // contrast_threshold — ниже = больше точек
+        15.0, // edge_threshold — выше = не отбрасываем точки на гранях
+    );
 
     // 1. SIFT на всех камерах
     let mut all_keypoints: Vec<Vec<KeyPoint>> = Vec::with_capacity(num_cameras);
@@ -214,25 +268,31 @@ pub fn match_first_camera_features_to_all(
         all_descriptors.push(desc);
     }
 
-    // 2. Строим k-d дерево по дескрипторам камеры 0 (референсной)
-    let ref_descriptors = &all_descriptors[0];
-    let mut tree: KdTree<f32, SIFT_DIM> = KdTree::new();
-    for (idx, desc) in ref_descriptors.iter().enumerate() {
-        tree.add(&to_fixed_array(desc), idx as u64);
-    }
+    // 2. Строим ImmutableKdTree по дескрипторам камеры 0
+    let ref_arrays: Vec<[f32; SIFT_DIM]> = all_descriptors[0]
+        .iter()
+        .map(|d| to_fixed_array(d))
+        .collect();
+    let ref_tree: ImmutableKdTree<f32, usize, SIFT_DIM, 32> =
+        ImmutableKdTree::new_from_slice(&ref_arrays);
 
-    // 3. Для каждой камеры i >= 1: 2 ближайших соседа + ratio test
+    let ratio_threshold: f32 = 0.6; // жёстче фильтр
+
+    // 3. Для каждой камеры i >= 1: двунаправленный matching
     let mut all_matches: Vec<Vec<FeatureMatch>> = Vec::with_capacity(num_cameras - 1);
 
     for cam_i in 1..num_cameras {
         let cam_descriptors = &all_descriptors[cam_i];
-        let mut cam_matches = Vec::new();
+        let mut cam_matches: Vec<FeatureMatch> = Vec::new();
 
+        // Прямой поиск: cam_i -> camera 0
         for (cam_idx, desc) in cam_descriptors.iter().enumerate() {
-            let neighbors = tree.nearest_n::<SquaredEuclidean>(&to_fixed_array(desc), 2);
+            let neighbors = ref_tree
+                .nearest_n::<SquaredEuclidean>(&to_fixed_array(desc), NonZero::new(2).unwrap());
 
-            // Lowe's ratio test: d_best < 0.7 * d_second
-            if neighbors.len() == 2 && neighbors[0].distance < 0.7 * neighbors[1].distance {
+            if neighbors.len() == 2
+                && neighbors[0].distance < ratio_threshold * neighbors[1].distance
+            {
                 cam_matches.push(FeatureMatch {
                     ref_idx: neighbors[0].item as usize,
                     cam_idx,
@@ -241,12 +301,32 @@ pub fn match_first_camera_features_to_all(
             }
         }
 
+        // Обратный поиск: camera 0 -> cam_i (взаимная проверка)
+        let cam_arrays: Vec<[f32; SIFT_DIM]> =
+            cam_descriptors.iter().map(|d| to_fixed_array(d)).collect();
+        let cam_tree: ImmutableKdTree<f32, usize, SIFT_DIM, 32> =
+            ImmutableKdTree::new_from_slice(&cam_arrays);
+
+        // Взаимная проверка: для каждого прямого матча проверяем обратный
+        let mut reciprocal_matches: Vec<FeatureMatch> = Vec::new();
+        let ref_desc_all = &all_descriptors[0];
+        for m in &cam_matches {
+            let ref_desc = &ref_desc_all[m.ref_idx];
+            let back_neighbors = cam_tree
+                .nearest_n::<SquaredEuclidean>(&to_fixed_array(ref_desc), NonZero::new(1).unwrap());
+
+            if !back_neighbors.is_empty() && back_neighbors[0].item as usize == m.cam_idx {
+                reciprocal_matches.push(m.clone());
+            }
+        }
+
         info!(
-            "Камера 0 ↔ камера {cam_i}: {} совпадений (из {})",
-            cam_matches.len(),
-            cam_descriptors.len()
+            "Камера 0 ↔ камера {cam_i}: {}/{} совпадений (взаимных), до проверки: {}",
+            reciprocal_matches.len(),
+            cam_descriptors.len(),
+            cam_matches.len()
         );
-        all_matches.push(cam_matches);
+        all_matches.push(reciprocal_matches);
     }
 
     (all_matches, all_keypoints, all_descriptors)

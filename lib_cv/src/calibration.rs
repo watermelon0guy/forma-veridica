@@ -8,7 +8,7 @@ use calib_targets::{
     detect::detect_charuco_best,
 };
 use image::GrayImage;
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use nalgebra::{Point2, Point3};
 use vision_calibration::{
     core::{CorrespondenceView, NoMeta, PlanarDataset, RigView, RigViewObs, View},
@@ -108,7 +108,10 @@ pub fn calibrate_with_charuco(
     let dataset = PlanarDataset::new(views)?;
     let _ = session.set_input(dataset);
 
-    let filter_option = FilterOptions::default();
+    let filter_option = FilterOptions {
+        max_reproj_error: 100.0, // почти не фильтруем при плохой начальной калибровке
+        ..FilterOptions::default()
+    };
     let _ = run_calibration_with_filtering(&mut session, filter_option);
 
     let intrinsics = session.export()?;
@@ -123,7 +126,6 @@ fn correspondence_view_from_charuco(
     let charuco_detection = match get_charuco_marker_first(charuco_board, img) {
         Some(charuco_det) => charuco_det,
         None => {
-            warn!("Error in charuco detection");
             return None;
         }
     };
@@ -145,13 +147,14 @@ fn correspondence_view_from_charuco(
             ));
         }
     }
+    debug!("ChArUco: {} углов найдено", points_3d.len());
     match CorrespondenceView::new(points_3d, points_2d) {
-        Ok(view) => return Some(view),
+        Ok(view) => Some(view),
         Err(e) => {
-            warn!("Error creating correspondence view: {e}");
-            return None;
+            warn!("Ошибка CorrespondenceView: {e}");
+            None
         }
-    };
+    }
 }
 
 pub fn calibrate_multiple_with_charuco_from_images(
@@ -252,14 +255,7 @@ pub fn calibrate_multiple_with_charuco_from_rigs(
     .len();
 
     let num_frames = rigs.len();
-    debug!(
-        "Количество камер изображений для калибровки: {}.",
-        num_cameras
-    );
-    debug!(
-        "Количество наборов изображений для калибровки: {}.",
-        num_frames
-    );
+    debug!("Камер: {num_cameras}, кадров: {num_frames}");
 
     if num_cameras < 2 {
         error!("Ошибка: для калибровки требуется как минимум 2 набора изображений.");
@@ -272,6 +268,21 @@ pub fn calibrate_multiple_with_charuco_from_rigs(
     session.set_input(rig_dataset)?;
     run_calibration(&mut session)?;
     let result = session.export()?;
+
+    // Диагностика
+    for (i, cam) in result.cameras.iter().enumerate() {
+        let k = cam.k.k_matrix();
+        info!(
+            "Камера {i}: fx={:.1} fy={:.1} cx={:.1} cy={:.1} k1={:.4} k2={:.4}",
+            k[(0, 0)],
+            k[(1, 1)],
+            k[(0, 2)],
+            k[(1, 2)],
+            cam.dist.k1,
+            cam.dist.k2
+        );
+    }
+    info!("mean_reproj_error: {:.2} px", result.mean_reproj_error);
 
     Ok(result)
 }
