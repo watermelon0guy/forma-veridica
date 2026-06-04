@@ -1,5 +1,14 @@
 use eframe::App;
-use log::{debug, error, info};
+use lib_cv::{
+    reconstruction::{
+        PointCloud, add_color_to_point_cloud, filter_point_cloud_by_confidence,
+        gather_points_2d_from_matches, match_first_camera_features_to_all, min_visible_match_set,
+        save_point_cloud, track_points_optical_flow_all, triangulate_points_multiple,
+        undistort_points,
+    },
+    video::VideoPlayer,
+};
+use log::info;
 use vision_calibration::rig_extrinsics::RigExtrinsicsExport;
 
 use std::path::PathBuf;
@@ -48,242 +57,131 @@ impl ReconstructionApp {
         }
     }
 
-    // pub(crate) fn run_pipeline(&self) -> Result<(), opencv::Error> {
-    //     let mut caps: Vec<VideoCapture> = Vec::new();
+    pub(crate) fn run_pipeline(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let calib = self
+            .calibration_data
+            .as_ref()
+            .ok_or("Нет данных калибровки")?;
+        let num_cameras = calib.cameras.len();
+        if self.video_paths.len() != num_cameras {
+            return Err("Количество видео не совпадает с количеством камер".into());
+        }
 
-    //     let video_data = self
-    //         .resources
-    //         .video_data
-    //         .as_ref()
-    //         .ok_or_else(|| Error::new(-1, "VideoData не загружена"))?;
+        // Открываем видео
+        let mut players: Vec<VideoPlayer> = self
+            .video_paths
+            .iter()
+            .map(|p| VideoPlayer::new(p).map_err(|e| e.to_string()))
+            .collect::<Result<_, _>>()?;
 
-    //     let calibration_data = self
-    //         .resources
-    //         .calibration_data
-    //         .as_ref()
-    //         .ok_or_else(|| Error::new(-1, "CalibrationData не загружена"))?;
+        let frame_step = 20u64;
 
-    //     let project_path = self
-    //         .resources
-    //         .project_path
-    //         .as_ref()
-    //         .ok_or_else(|| Error::new(-1, "Нет пути проекта не загружена"))?;
+        // --- Первый кадр: SIFT + matching ---
+        let first_frames: Vec<_> = players.iter().map(|p| p.dynamic_image().clone()).collect();
 
-    //     open_video_captures(&mut caps, &video_data.video_files)?;
+        let (all_matches, all_keypoints, _descriptors) =
+            match_first_camera_features_to_all(&first_frames);
 
-    //     let mut frames = vec![Mat::default(); caps.len()];
+        let filtered_matches = min_visible_match_set(&all_matches, all_keypoints[0].len());
 
-    //     read_frames(&mut caps, &mut frames)?;
+        let points_2d = gather_points_2d_from_matches(&filtered_matches, &all_keypoints);
 
-    //     let (mut all_matches, keypoints_list, _descriptors_list) =
-    //         match_first_camera_features_to_all(&frames);
+        // --- Undistortion ---
+        let mut undistorted: Vec<Vec<_>> = Vec::with_capacity(num_cameras);
+        for cam_i in 0..num_cameras {
+            let undist = undistort_points(&points_2d[cam_i], &calib.cameras[cam_i]);
+            undistorted.push(undist);
+        }
 
-    //     all_matches = min_visible_match_set(&mut all_matches, &keypoints_list);
+        // --- Триангуляция ---
+        let points_3d = triangulate_points_multiple(&undistorted, calib)?;
 
-    //     let points_2d: Vector<Mat> =
-    //         match gather_points_2d_from_matches(&all_matches, &keypoints_list) {
-    //             Ok(p_2d) => {
-    //                 debug!("Координаты извлечены из массива общих совпадений");
-    //                 p_2d
-    //             }
-    //             Err(e) => {
-    //                 error!(
-    //                     "Ошибка извлечения координат из массива общих совпадений: {}",
-    //                     e
-    //                 );
-    //                 return Err(Error::new(-1, "Не удалось извлечь 2D точки из совпадений"));
-    //             }
-    //         };
-    //     let mut undistorted_points_2d = Vector::<Mat>::default();
+        let current_frame: usize = 0;
+        let mut cloud = PointCloud {
+            points: points_3d,
+            timestamp: current_frame,
+        };
 
-    //     for (i, points) in points_2d.iter().enumerate() {
-    //         let undistorted_nx2 =
-    //             match undistort_points_single_camera(&points, &calibration_data.camera_params[i]) {
-    //                 Ok(u_nx2) => u_nx2,
-    //                 Err(e) => {
-    //                     error!("Ошибка в undistort_points_single_camera: {}", e);
-    //                     return Err(e);
-    //                 }
-    //             };
+        add_color_to_point_cloud(&mut cloud, &points_2d[0], &first_frames[0]);
 
-    //         undistorted_points_2d.push(undistorted_nx2);
-    //     }
+        let before = cloud.points.len();
+        filter_point_cloud_by_confidence(&mut cloud, 0.25);
+        info!(
+            "Кадр 0: отфильтровано {} точек, оставлено {}",
+            before - cloud.points.len(),
+            cloud.points.len()
+        );
 
-    //     let points_3d = match lib_cv::reconstruction::triangulate_points_multiple(
-    //         &undistorted_points_2d,
-    //         &calibration_data.camera_params,
-    //     ) {
-    //         Ok(points) => points,
-    //         Err(e) => {
-    //             error!("Ошибка при триангуляции точек: {:?}", e);
-    //             return Err(e);
-    //         }
-    //     };
+        std::fs::create_dir_all("point_clouds")?;
+        save_point_cloud(&cloud, format!("point_clouds/frame_{current_frame:04}.ply"))?;
 
-    //     let current_frame: usize = 0;
+        // --- Готовимся к optical flow ---
+        let mut prev_frames = first_frames;
+        let mut prev_points = points_2d.clone();
 
-    //     let mut cloud = PointCloud {
-    //         points: points_3d,
-    //         timestamp: current_frame,
-    //     };
+        // --- Цикл по оставшимся кадрам ---
+        let total_frames = players[0].total_frames();
+        let mut frame_idx: usize = 1;
 
-    //     add_color_to_point_cloud(&mut cloud, &points_2d, &frames[0]);
+        loop {
+            // Шагаем вперёд на frame_step
+            let mut eof = false;
+            for p in &mut players {
+                if p.rewind_forward(frame_step).is_err() {
+                    eof = true;
+                    break;
+                }
+            }
+            if eof {
+                break;
+            }
 
-    //     let initial_count = cloud.points.len();
-    //     filter_point_cloud_by_confindence(&mut cloud, 0.25);
-    //     info!(
-    //         "Отфильтровано {} точек (оставлено {})",
-    //         initial_count - cloud.points.len(),
-    //         cloud.points.len()
-    //     );
-    //     let dest_path = project_path.join(format!("data/point_clouds"));
-    //     let filename = dest_path.join(format!("point_cloud_{current_frame}.ply"));
-    //     if let Err(e) = create_dir_all(&dest_path) {
-    //         return Err(opencv::Error::new(
-    //             -1,
-    //             &format!("Не удалось создать директорию: {}", e),
-    //         ));
-    //     }
+            let curr_frames: Vec<_> = players.iter().map(|p| p.dynamic_image().clone()).collect();
 
-    //     match save_point_cloud(&cloud, &filename) {
-    //         Ok(_) => info!(
-    //             "Облако точек успешно сохранено в файл: {}",
-    //             filename.display()
-    //         ),
-    //         Err(e) => error!("Ошибка при сохранении облака точек: {:?}", e),
-    //     };
+            // Optical flow: трекинг точек на каждой камере
+            let prev_gray: Vec<_> = prev_frames.iter().map(|f| f.to_luma8()).collect();
+            let curr_gray: Vec<_> = curr_frames.iter().map(|f| f.to_luma8()).collect();
 
-    //     let mut prev_images = frames.clone();
+            let new_points =
+                track_points_optical_flow_all(&prev_gray, &curr_gray, &prev_points, 13, 30, 3);
 
-    //     let mut prev_points: Vec<Vector<Point2f>> =
-    //         vec![Vector::<Point2f>::default(); calibration_data.num_cameras];
-    //     for camera_i in 0..calibration_data.num_cameras {
-    //         for j in 0..points_2d.get(camera_i).unwrap().rows() {
-    //             let x = *points_2d
-    //                 .get(camera_i as usize)
-    //                 .unwrap()
-    //                 .at_2d::<f64>(j, 0)
-    //                 .unwrap() as f32;
-    //             let y = *points_2d
-    //                 .get(camera_i as usize)
-    //                 .unwrap()
-    //                 .at_2d::<f64>(j, 1)
-    //                 .unwrap() as f32;
-    //             prev_points[camera_i].push(opencv::core::Point2f::new(x, y));
-    //         }
-    //     }
+            // Undistortion новых точек
+            let mut undistorted: Vec<Vec<_>> = Vec::with_capacity(num_cameras);
+            for cam_i in 0..num_cameras {
+                let undist = undistort_points(&new_points[cam_i], &calib.cameras[cam_i]);
+                undistorted.push(undist);
+            }
 
-    //     for current_frame in 1..video_data.total_frames {
-    //         read_frames(&mut caps, &mut frames)?;
-    //         let win_size = opencv::core::Size::new(13, 13);
-    //         let max_level = 3;
-    //         let criteria = opencv::core::TermCriteria::new(
-    //             opencv::core::TermCriteria_EPS + opencv::core::TermCriteria_COUNT,
-    //             1000_000,
-    //             0.000_001,
-    //         )
-    //         .unwrap();
-    //         let flags = 0;
-    //         let min_eig_threshold = 1e-4;
+            // Триангуляция
+            let points_3d = triangulate_points_multiple(&undistorted, calib)?;
 
-    //         let mut undistorted_points_2d = Vector::<Mat>::default();
+            let mut cloud = PointCloud {
+                points: points_3d,
+                timestamp: frame_idx,
+            };
 
-    //         for (camera_i, (prev, next)) in prev_images.iter().zip(frames.iter()).enumerate() {
-    //             // Подготавливаем данные для оптического потока
-    //             let mut next_points = Vector::<Point2f>::default();
-    //             let mut status = Vector::<u8>::default();
-    //             let mut err = Vector::<f32>::default();
+            add_color_to_point_cloud(&mut cloud, &new_points[0], &curr_frames[0]);
 
-    //             // Преобразуем points_2d в формат для оптического потока (используем точки первой камеры)
-    //             calc_optical_flow_pyr_lk(
-    //                 &prev,
-    //                 &next,
-    //                 &prev_points[camera_i],
-    //                 &mut next_points,
-    //                 &mut status,
-    //                 &mut err,
-    //                 win_size,
-    //                 max_level,
-    //                 criteria,
-    //                 flags,
-    //                 min_eig_threshold,
-    //             )
-    //             .unwrap();
+            let before = cloud.points.len();
+            filter_point_cloud_by_confidence(&mut cloud, 0.25);
+            info!(
+                "Кадр {frame_idx}: отфильтровано {} точек, оставлено {}",
+                before - cloud.points.len(),
+                cloud.points.len()
+            );
 
-    //             debug!(
-    //                 "Потеряно треков: {}",
-    //                 status.iter().filter(|&s| s == 0).count()
-    //             );
+            save_point_cloud(&cloud, format!("point_clouds/frame_{frame_idx:04}.ply"))?;
 
-    //             let points_mat = match vector_point2f_to_mat(&next_points) {
-    //                 Ok(mat) => mat,
-    //                 Err(e) => {
-    //                     error!("Ошибка конвертации из vector в mat: {}", e);
-    //                     return Err(e);
-    //                 }
-    //             };
-    //             let undistorted_nx2 = match undistort_points_single_camera(
-    //                 &points_mat,
-    //                 &calibration_data.camera_params[camera_i],
-    //             ) {
-    //                 Ok(u_nx2) => u_nx2,
-    //                 Err(e) => {
-    //                     error!("Ошибка в undistort_points_single_camera: {}", e);
-    //                     return Err(e);
-    //                 }
-    //             };
-    //             undistorted_points_2d.push(undistorted_nx2);
+            prev_frames = curr_frames;
+            prev_points = new_points;
+            frame_idx += 1;
 
-    //             prev_points[camera_i] = next_points;
-    //         }
+            if players[0].current_frame() >= total_frames - frame_step {
+                break;
+            }
+        }
 
-    //         let points_3d = match lib_cv::reconstruction::triangulate_points_multiple(
-    //             &undistorted_points_2d,
-    //             &calibration_data.camera_params,
-    //         ) {
-    //             Ok(points) => {
-    //                 info!(
-    //                     "Триангуляция успешно выполнена. Получено {} 3D точек",
-    //                     points.len()
-    //                 );
-    //                 points
-    //             }
-    //             Err(e) => {
-    //                 error!("Ошибка при триангуляции точек: {:?}", e);
-    //                 return Err(e);
-    //             }
-    //         };
-
-    //         let mut cloud = PointCloud {
-    //             points: points_3d,
-    //             timestamp: current_frame,
-    //         };
-
-    //         add_color_to_point_cloud(&mut cloud, &points_2d, &frames[0]);
-
-    //         // Фильтрация по уверенности
-    //         let initial_count = cloud.points.len();
-    //         filter_point_cloud_by_confindence(&mut cloud, 0.25);
-    //         info!(
-    //             "Отфильтровано {} точек (оставлено {})",
-    //             initial_count - cloud.points.len(),
-    //             cloud.points.len()
-    //         );
-    //         info!("Обработка облака точек завершена");
-
-    //         let filename = dest_path.join(format!("point_cloud_{current_frame}.ply"));
-
-    //         match save_point_cloud(&cloud, &filename) {
-    //             Ok(_) => info!(
-    //                 "Облако точек успешно сохранено в файл: {}",
-    //                 filename.display()
-    //             ),
-    //             Err(e) => error!("Ошибка при сохранении облака точек: {:?}", e),
-    //         };
-
-    //         prev_images = frames.clone();
-    //     }
-
-    //     Ok(())
-    // }
+        info!("Пайплайн завершён. Обработано {} кадров", frame_idx);
+        Ok(())
+    }
 }
