@@ -1,479 +1,286 @@
+use kiddo::KdTree;
+use kiddo::SquaredEuclidean;
 use log::{debug, error, info, warn};
-use opencv::{
-    Error,
-    calib3d::undistort_points,
-    core::{DMatch, KeyPoint, Mat, Point3d, StsError, Vec2d, Vector, gemm},
-    prelude::*,
-    sfm::triangulate_points,
-};
-use std::fs::File;
-use std::io::{self, Write};
-use std::path::Path;
-
-use crate::{
-    calibration::CameraParameters,
-    correspondence::{bf_match_knn, sift},
-};
+use nalgebra::{DMatrix, Matrix3x4, Point2, Point3, SVD};
+use sift::{KeyPoint, Sift};
+use vision_calibration::core::{Iso3, PinholeCamera};
+use vision_calibration::rig_extrinsics::RigExtrinsicsExport;
 
 #[derive(Debug, Clone)]
-pub struct Point3D {
-    pub x: f64,
-    pub y: f64,
-    pub z: f64,
+pub struct PointContainer {
+    pub p: Point3<f64>,
     pub color: Option<(u8, u8, u8)>, // RGB цвет точки
     pub track_id: Option<usize>,     // ID для отслеживания точки во времени
     pub confidence: f32,             // Уверенность в позиции точки
 }
 
-impl Point3D {
-    pub fn new(x: f64, y: f64, z: f64, confidence: f32) -> Self {
+impl PointContainer {
+    pub fn new(p: Point3<f64>, confidence: f32) -> Self {
         Self {
-            x,
-            y,
-            z,
+            p,
             color: None,
             track_id: None,
             confidence,
         }
-    }
-
-    pub fn from_opencv_point(point: Point3d, confidence: f32) -> Self {
-        Self {
-            x: point.x,
-            y: point.y,
-            z: point.z,
-            color: None,
-            track_id: None,
-            confidence,
-        }
-    }
-
-    pub fn to_opencv_point(&self) -> Point3d {
-        Point3d::new(self.x, self.y, self.z)
     }
 }
 
 /// Структура для хранения облака точек
 #[derive(Debug, Clone)]
 pub struct PointCloud {
-    pub points: Vec<Point3D>,
+    pub points: Vec<PointContainer>,
     pub timestamp: usize, // Временная метка кадра
 }
 
-pub fn triangulate_points_multiple(
-    points_2d: &Vector<Mat>,
-    camera_params: &[CameraParameters],
-) -> Result<Vec<Point3D>, Error> {
-    if points_2d.len() < 2 || camera_params.len() < 2 {
-        error!("Недостаточно камер или наборов точек");
-        return Err(Error::new(
-            StsError as i32,
-            "Требуется минимум 2 камеры для триангуляции".to_string(),
-        ));
-    }
+/// Собирает проекционные матрицы P_i = K_i · [R_i | t_i] для всех камер.
+pub fn build_projection_matrices(export: &RigExtrinsicsExport) -> Vec<Matrix3x4<f64>> {
+    let n = export.cameras.len();
+    let mut projections: Vec<Matrix3x4<f64>> = Vec::with_capacity(n);
 
-    if points_2d.len() != camera_params.len() {
-        error!("Количество наборов точек не соответствует количеству камер");
-        return Err(Error::new(
-            StsError as i32,
-            "Количество списков точек должно совпадать с количеством камер".to_string(),
-        ));
-    }
-
-    // Количество точек (предполагаем, что все матрицы имеют одинаковое количество строк)
-    let num_points = points_2d.get(0)?.rows();
-    debug!("Количество точек для триангуляции: {}", num_points);
-
-    // Проверка, что все матрицы имеют правильный размер
-    for (i, points) in points_2d.iter().enumerate() {
-        if points.rows() != num_points || points.cols() != 2 {
-            error!("Неверный размер матрицы точек для камеры {}", i);
-            return Err(Error::new(
-                StsError as i32,
-                format!(
-                    "Матрица точек камеры {} имеет неверный размер. Ожидается {}x2, получено {}x{}",
-                    i,
-                    num_points,
-                    points.rows(),
-                    points.cols()
-                ),
-            ));
-        }
-    }
-
-    // Подготовка матриц проекций для всех камер
-    let mut projection_matrices = Vector::<Mat>::default();
-
-    for (i, cam) in camera_params.iter().enumerate() {
-        // Проверка первой камеры
-        if i == 0 {
-            // Проверяем, является ли матрица вращения единичной
-            let mut is_identity = true;
-            for r in 0..3 {
-                for c in 0..3 {
-                    let expected = if r == c { 1.0 } else { 0.0 };
-                    let actual = cam.rotation.at_2d::<f64>(r, c)?;
-                    if (actual - expected).abs() > 1e-5 {
-                        is_identity = false;
-                        break;
-                    }
-                }
-                if !is_identity {
-                    break;
-                }
-            }
-
-            // Проверяем, является ли вектор трансляции нулевым
-            let mut is_zero_translation = true;
-            for r in 0..3 {
-                let val = cam.translation.at_2d::<f64>(r, 0)?;
-                if val.abs() > 1e-5 {
-                    is_zero_translation = false;
-                    break;
-                }
-            }
-
-            if !is_identity || !is_zero_translation {
-                warn!(
-                    "Вектор трансляции не нулевой или матрица вращения не единичная для главной камеры"
-                );
-            }
-        }
-
-        let mut r_t = Mat::default();
-        opencv::core::hconcat2(&cam.rotation, &cam.translation, &mut r_t)?;
-
-        let mut projection_matrix = Mat::default();
-        opencv::sfm::projection_from_k_rt(
-            &cam.intrinsic,
-            &cam.rotation,
-            &cam.translation,
-            &mut projection_matrix,
-        )
-        .unwrap();
-        projection_matrices.push(projection_matrix);
-    }
-
-    // Преобразование точек в формат для trianguluate_points (2xN матрицы)
-    let converted_points: Vector<Mat> = points_2d
-        .iter()
-        .map(|points| {
-            let mut transposed = Mat::default();
-            opencv::core::transpose(&points, &mut transposed)?;
-            Ok(transposed)
-        })
-        .collect::<Result<Vector<Mat>, Error>>()?;
-
-    let mut points_3d = Mat::default();
-
-    match triangulate_points(&converted_points, &projection_matrices, &mut points_3d) {
-        Ok(_) => {
-            debug!(
-                "Триангуляция успешно выполнена. Количество точек: {}",
-                points_3d.cols()
+    for i in 0..n {
+        if i == 0 && export.cam_se3_rig[0] != Iso3::identity() {
+            warn!(
+                "Первая камера должна быть референсной, \
+                 но её rig->camera transform не identity"
             );
         }
-        Err(e) => {
-            error!("Ошибка при триангуляции: {:?}", e);
-            return Err(e);
-        }
+
+        let k = export.cameras[i].k.k_matrix();
+        let rt: Matrix3x4<f64> = export.cam_se3_rig[i]
+            .to_homogeneous()
+            .fixed_view::<3, 4>(0, 0)
+            .into_owned();
+        projections.push(k * rt);
     }
 
-    let mut result = Vec::with_capacity(num_points as usize);
+    projections
+}
 
-    let mut total_errors = Vec::new();
-    let mut num_bad_points = 0;
+/// Убирает дисторсию: пиксельные координаты -> нормализованные (z = 1).
+/// Использует полный обратный ход модели камеры.
+pub fn undistort_points(
+    points_px: &[Point2<f64>], // N искажённых пикселей
+    camera: &PinholeCamera,
+) -> Vec<Point2<f64>> {
+    // N неискажённых нормализованных
+    points_px
+        .iter()
+        .map(|px| {
+            let ray = camera.backproject_pixel(px);
+            Point2::new(ray.point.x, ray.point.y)
+        })
+        .collect()
+}
 
-    for i in 0..num_points {
-        let x = *points_3d.at_2d::<f64>(0, i)?;
-        let y = *points_3d.at_2d::<f64>(1, i)?;
-        let z = *points_3d.at_2d::<f64>(2, i)?;
-
-        // Вычисление перепроекционной ошибки для оценки качества триангуляции
-        let mut total_reproj_error = 0.0;
-        let mut errors_by_camera = Vec::new();
-
-        for (j, projection) in projection_matrices.iter().enumerate() {
-            // Создаем 4D точку (X, Y, Z, 1)
-            let mut point_4d = Mat::zeros(4, 1, opencv::core::CV_64F)?.to_mat()?;
-            *point_4d.at_2d_mut::<f64>(0, 0)? = x;
-            *point_4d.at_2d_mut::<f64>(1, 0)? = y;
-            *point_4d.at_2d_mut::<f64>(2, 0)? = z;
-            *point_4d.at_2d_mut::<f64>(3, 0)? = 1.0;
-
-            // Проекция на изображение: x' = P * X
-            let mut projected = Mat::default();
-            gemm(
-                &projection,
-                &point_4d,
-                1.0,
-                &Mat::default(),
-                0.0,
-                &mut projected,
-                0,
-            )?;
-
-            // Нормализуем проекцию
-            let p_x = *projected.at_2d::<f64>(0, 0)? / *projected.at_2d::<f64>(2, 0)?;
-            let p_y = *projected.at_2d::<f64>(1, 0)? / *projected.at_2d::<f64>(2, 0)?;
-
-            // Исходная точка на изображении
-            let orig_x = *points_2d.get(j)?.at_2d::<f64>(i, 0)?;
-            let orig_y = *points_2d.get(j)?.at_2d::<f64>(i, 1)?;
-
-            // Вычисляем ошибку (евклидово расстояние)
-            let error = ((p_x - orig_x).powi(2) + (p_y - orig_y).powi(2)).sqrt();
-            errors_by_camera.push(error);
-            total_reproj_error += error;
-        }
-
-        // Средняя ошибка репроекции для этой точки
-        let avg_error = total_reproj_error / camera_params.len() as f64;
-        total_errors.push(avg_error);
-
-        // Преобразуем в нормализованную уверенность (1.0 - хорошо, 0.0 - плохо)
-        // Порог ошибки - настраиваемый параметр (например, 5 пикселей)
-        let confidence = (1.0 - (avg_error / 5.0).min(1.0)) as f32;
-
-        // Считаем плохие точки (с большой ошибкой)
-        if avg_error > 5.0 {
-            num_bad_points += 1;
-        }
-
-        result.push(Point3D::new(x, y, z, confidence));
+pub fn triangulate_points_multiple(
+    points_2d: &[Vec<Point2<f64>>],
+    camera_params: &RigExtrinsicsExport,
+) -> Result<Vec<PointContainer>, Box<dyn std::error::Error>> {
+    if points_2d.len() < 2 || camera_params.cameras.len() < 2 {
+        error!("Недостаточно камер или наборов точек");
+        return Err("Требуется минимум 2 камеры для триангуляции".into());
+    }
+    if points_2d.len() != camera_params.cameras.len() {
+        error!("Количество наборов точек не соответствует количеству камер");
+        return Err("Количество списков точек должно совпадать с количеством камер".into());
     }
 
-    // Вывод статистики по ошибкам
-    if !total_errors.is_empty() {
-        total_errors.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let min_error = total_errors[0];
-        let max_error = total_errors[total_errors.len() - 1];
-        let median_error = total_errors[total_errors.len() / 2];
-        let mean_error = total_errors.iter().sum::<f64>() / total_errors.len() as f64;
+    let num_points = points_2d[0].len();
+    debug!("Количество точек для триангуляции: {}", num_points);
 
-        info!("Минимальная ошибка: {:.2} пикс.", min_error);
-        info!("Медианная ошибка:  {:.2} пикс.", median_error);
-        info!("Средняя ошибка:    {:.2} пикс.", mean_error);
-        info!("Максимальная ошибка: {:.2} пикс.", max_error);
-        info!(
-            "Количество точек с ошибкой > 5 пикс.: {} из {} ({:.1}%)",
-            num_bad_points,
-            num_points,
-            100.0 * num_bad_points as f64 / num_points as f64
-        );
-    }
+    let projections = build_projection_matrices(camera_params);
+    let result = triangulate_points(points_2d, &projections);
+
+    // Статистика по confidence
+    let num_bad = result.iter().filter(|p| p.confidence < 0.25).count();
+    info!(
+        "Триангулировано {} точек, из них {} с низкой уверенностью (< 0.25)",
+        result.len(),
+        num_bad
+    );
+
     Ok(result)
 }
 
-pub fn save_point_cloud<P: AsRef<Path>>(cloud: &PointCloud, path: P) -> io::Result<()> {
-    let mut file = File::create(path)?;
+fn triangulate_points(
+    points_2d: &[Vec<Point2<f64>>],
+    projection_matrices: &[Matrix3x4<f64>],
+) -> Vec<PointContainer> {
+    let num_points = points_2d[0].len();
+    let num_cameras = projection_matrices.len();
+    let mut points_3d = Vec::with_capacity(num_points);
 
-    // Определяем, сколько точек имеют цвет (для заголовка PLY)
-    let points_with_color = cloud.points.iter().filter(|p| p.color.is_some()).count();
-    let has_color = points_with_color > 0;
+    for pt_i in 0..num_points {
+        // Строим матрицу A (2N × 4) для DLT
+        let mut a = DMatrix::zeros(2 * num_cameras, 4);
 
-    // Записываем заголовок PLY
-    writeln!(file, "ply")?;
-    writeln!(file, "format ascii 1.0")?;
-    writeln!(file, "element vertex {}", cloud.points.len())?;
-    writeln!(file, "property float x")?;
-    writeln!(file, "property float y")?;
-    writeln!(file, "property float z")?;
+        for cam_i in 0..num_cameras {
+            let pt = points_2d[cam_i][pt_i];
+            let p = &projection_matrices[cam_i];
 
-    // Добавляем свойства цвета, если они есть
-    if has_color {
-        writeln!(file, "property uchar red")?;
-        writeln!(file, "property uchar green")?;
-        writeln!(file, "property uchar blue")?;
-    }
-
-    // Добавляем свойство уверенности
-    writeln!(file, "property float confidence")?;
-
-    // Конец заголовка
-    writeln!(file, "end_header")?;
-
-    // Записываем данные
-    for point in &cloud.points {
-        if has_color {
-            // С цветом
-            let (r, g, b) = point.color.unwrap_or((128, 128, 128));
-            writeln!(
-                file,
-                "{} {} {} {} {} {} {}",
-                point.x, point.y, point.z, r, g, b, point.confidence
-            )?;
-        } else {
-            // Без цвета
-            writeln!(
-                file,
-                "{} {} {} {}",
-                point.x, point.y, point.z, point.confidence
-            )?;
+            // Строки: p.row(0) - u * p.row(2),  p.row(1) - v * p.row(2)
+            for j in 0..4 {
+                a[(2 * cam_i, j)] = p[(0, j)] - pt.x * p[(2, j)];
+                a[(2 * cam_i + 1, j)] = p[(1, j)] - pt.y * p[(2, j)];
+            }
         }
+
+        // SVD: A = U·Σ·V^T. Последняя строка V^T -> искомая точка
+        let svd = SVD::new(a, true, true);
+        let v_t = svd.v_t.unwrap();
+        let x_homog = v_t.row(3); // строка с минимальным сингулярным числом
+
+        let w = x_homog[3];
+        if w.abs() < 1e-12 {
+            warn!("Точка {} на бесконечности (w ≈ 0), пропускаем", pt_i);
+            continue;
+        }
+
+        let x = x_homog[0] / w;
+        let y = x_homog[1] / w;
+        let z = x_homog[2] / w;
+
+        // Reprojection error -> confidence
+        let mut total_error = 0.0f64;
+        for cam_i in 0..num_cameras {
+            let p = &projection_matrices[cam_i];
+            let orig = points_2d[cam_i][pt_i];
+
+            // P * [x, y, z, 1]^T -> (proj_x, proj_y, proj_w)
+            let proj_x = p[(0, 0)] * x + p[(0, 1)] * y + p[(0, 2)] * z + p[(0, 3)];
+            let proj_y = p[(1, 0)] * x + p[(1, 1)] * y + p[(1, 2)] * z + p[(1, 3)];
+            let proj_w = p[(2, 0)] * x + p[(2, 1)] * y + p[(2, 2)] * z + p[(2, 3)];
+
+            let err =
+                ((proj_x / proj_w - orig.x).powi(2) + (proj_y / proj_w - orig.y).powi(2)).sqrt();
+            total_error += err;
+        }
+
+        let avg_error = total_error / num_cameras as f64;
+        let confidence = (1.0 - (avg_error / 5.0).min(1.0)) as f32;
+
+        points_3d.push(PointContainer::new(Point3::new(x, y, z), confidence));
     }
 
-    Ok(())
+    points_3d
 }
 
+/// Размерность SIFT-дескриптора (всегда 128 чисел).
+const SIFT_DIM: usize = 128;
+
+/// Сопоставление: ключевая точка референсной камеры <-> точка другой камеры.
+#[derive(Debug, Clone)]
+pub struct FeatureMatch {
+    pub ref_idx: usize, // индекс keypoint в камере 0
+    pub cam_idx: usize, // индекс keypoint в целевой камере (i >= 1)
+    pub distance: f32,  // расстояние между дескрипторами
+}
+
+/// Преобразует срез f32 в массив фиксированной длины для kiddo.
+fn to_fixed_array(v: &[f32]) -> [f32; SIFT_DIM] {
+    let mut arr = [0.0f32; SIFT_DIM];
+    arr.copy_from_slice(&v[..SIFT_DIM]);
+    arr
+}
+
+/// Детектирует SIFT-признаки на всех камерах и сопоставляет камеру 0 с каждой
+/// из остальных через KNN-поиск (k-d дерево) + Lowe's ratio test.
 pub fn match_first_camera_features_to_all(
-    images: &Vec<Mat>,
-) -> (Vec<Vector<Vector<DMatch>>>, Vec<Vector<KeyPoint>>, Vec<Mat>) {
-    let mut keypoints_list = Vec::new();
-    let mut descriptors_list = Vec::new();
-
-    for (i, image) in images.iter().enumerate() {
-        info!("Обработка изображения {} из {}", i + 1, images.len());
-        let (keypoints, descriptors) = match sift(&image, 0, 4, 0.04, 10f64, 1.6, false) {
-            Ok(it) => {
-                info!("  -> Найдено {} ключевых точек", it.0.len());
-                it
-            }
-            Err(e) => {
-                error!("  -> Ошибка при выполнении SIFT: {:?}", e);
-                continue;
-            }
-        };
-        keypoints_list.push(keypoints);
-        descriptors_list.push(descriptors);
+    images: &[image::DynamicImage],
+) -> (
+    Vec<Vec<FeatureMatch>>, // matches[other_cam][match_idx]
+    Vec<Vec<KeyPoint>>,     // keypoints[cam]
+    Vec<Vec<Vec<f32>>>,     // descriptors[cam][kp_idx]
+) {
+    let num_cameras = images.len();
+    if num_cameras < 2 {
+        warn!("Нужно минимум 2 изображения для сопоставления");
+        return (vec![], vec![], vec![]);
     }
 
-    let mut all_matches = Vec::new();
-    // Первая камера - референсная
-    let ref_descriptor = &descriptors_list[0];
+    let sift = Sift::new(1.6, 4, 3, 0.5, 0.04, 10.0);
 
-    for i in 1..descriptors_list.len() {
-        info!("Сопоставление камеры 1 с камерой {}", i + 1);
-        let matches = match bf_match_knn(
-            &ref_descriptor,
-            &descriptors_list[i],
-            2,   // k = 2 соседа
-            0.7, // ratio = 0.7
-        ) {
-            Ok(it) => {
-                info!("Найдено {} сопоставлений", it.len());
-                it
-            }
-            Err(e) => {
-                error!("Ошибка при выполнении сопоставления BF KNN: {:?}", e);
-                continue;
-            }
-        };
-        all_matches.push(matches);
+    // 1. SIFT на всех камерах
+    let mut all_keypoints: Vec<Vec<KeyPoint>> = Vec::with_capacity(num_cameras);
+    let mut all_descriptors: Vec<Vec<Vec<f32>>> = Vec::with_capacity(num_cameras);
+
+    for (i, img) in images.iter().enumerate() {
+        let (kp, desc) = sift.detect_and_compute(img);
+        info!("Камера {i}: найдено {} ключевых точек", kp.len());
+        all_keypoints.push(kp);
+        all_descriptors.push(desc);
     }
-    (all_matches, keypoints_list, descriptors_list)
-    // TODO добавить вывод ошибки при отсутсвии сопоставлений
+
+    // 2. Строим k-d дерево по дескрипторам камеры 0 (референсной)
+    let ref_descriptors = &all_descriptors[0];
+    let mut tree: KdTree<f32, SIFT_DIM> = KdTree::new();
+    for (idx, desc) in ref_descriptors.iter().enumerate() {
+        tree.add(&to_fixed_array(desc), idx as u64);
+    }
+
+    // 3. Для каждой камеры i >= 1: 2 ближайших соседа + ratio test
+    let mut all_matches: Vec<Vec<FeatureMatch>> = Vec::with_capacity(num_cameras - 1);
+
+    for cam_i in 1..num_cameras {
+        let cam_descriptors = &all_descriptors[cam_i];
+        let mut cam_matches = Vec::new();
+
+        for (cam_idx, desc) in cam_descriptors.iter().enumerate() {
+            let neighbors = tree.nearest_n::<SquaredEuclidean>(&to_fixed_array(desc), 2);
+
+            // Lowe's ratio test: d_best < 0.7 * d_second
+            if neighbors.len() == 2 && neighbors[0].distance < 0.7 * neighbors[1].distance {
+                cam_matches.push(FeatureMatch {
+                    ref_idx: neighbors[0].item as usize,
+                    cam_idx,
+                    distance: neighbors[0].distance,
+                });
+            }
+        }
+
+        info!(
+            "Камера 0 ↔ камера {cam_i}: {} совпадений (из {})",
+            cam_matches.len(),
+            cam_descriptors.len()
+        );
+        all_matches.push(cam_matches);
+    }
+
+    (all_matches, all_keypoints, all_descriptors)
 }
 
+/// Оставляет только сопоставления, где точка видна ВО ВСЕХ камерах.
 pub fn min_visible_match_set(
-    all_matches: &Vec<Vector<Vector<DMatch>>>,
-    keypoints_list: &Vec<Vector<KeyPoint>>,
-) -> Vec<Vector<Vector<DMatch>>> {
-    // Создаем множество индексов ключевых точек из референсной камеры,
-    // которые имеют соответствие во всех других камерах
-    let mut common_points_indices = Vec::new();
-
-    // Для каждой ключевой точки из референсной камеры
-    for i in 0..keypoints_list[0].len() {
-        // Проверяем, есть ли соответствие этой точки во всех других камерах
-        let mut visible_in_all_cameras = true;
-
-        for camera_matches in all_matches {
-            // Проверяем, существует ли соответствие для текущей точки в данной камере
-            let point_has_match = camera_matches
-                .iter()
-                .any(|m| m.get(0).unwrap().query_idx as usize == i);
-
-            if !point_has_match {
-                visible_in_all_cameras = false;
-                break;
-            }
-        }
-
-        if visible_in_all_cameras {
-            common_points_indices.push(i);
-        }
+    all_matches: &[Vec<FeatureMatch>],
+    ref_num_keypoints: usize,
+) -> Vec<Vec<FeatureMatch>> {
+    if all_matches.is_empty() {
+        return vec![];
     }
+
+    // Какие keypoints камеры 0 есть во всех остальных камерах
+    let common_ref_indices: Vec<usize> = (0..ref_num_keypoints)
+        .filter(|ref_idx| {
+            all_matches
+                .iter()
+                .all(|cam| cam.iter().any(|m| m.ref_idx == *ref_idx))
+        })
+        .collect();
 
     info!(
-        "Найдено {} точек, видимых во всех камерах",
-        common_points_indices.len()
+        "Точек, видимых во всех камерах: {} из {}",
+        common_ref_indices.len(),
+        ref_num_keypoints
     );
 
-    // Фильтруем matches, оставляя только точки, видимые во всех камерах
-    let mut filtered_matches = Vec::new();
-    for camera_matches in all_matches {
-        let mut filtered_camera_matches = Vector::<Vector<DMatch>>::new();
-
-        for idx in &common_points_indices {
-            // Находим соответствие для этой точки в текущей камере
-            for m in camera_matches {
-                if m.get(0).unwrap().query_idx as usize == *idx {
-                    filtered_camera_matches.push(m.clone());
-                    break;
-                }
-            }
-        }
-
-        filtered_matches.push(filtered_camera_matches);
-    }
-
-    filtered_matches
-}
-
-pub fn filter_point_cloud_by_confindence(cloud: &mut PointCloud, confidence_threshold: f32) {
-    cloud
-        .points
-        .retain(|point| point.confidence >= confidence_threshold);
-}
-
-pub fn add_color_to_point_cloud(
-    cloud: &mut PointCloud,
-    distorted_points: &Vector<Mat>,
-    ref_image: &Mat,
-) {
-    // Добавляем цвет из исходного изображения
-    for (i, point) in cloud.points.iter_mut().enumerate() {
-        let x = *distorted_points
-            .get(0)
-            .unwrap()
-            .at_2d::<f64>(i as i32, 0)
-            .unwrap() as i32;
-        let y = *distorted_points
-            .get(0)
-            .unwrap()
-            .at_2d::<f64>(i as i32, 1)
-            .unwrap() as i32;
-
-        // Проверяем, что координаты в пределах изображения
-        if x >= 0 && y >= 0 && x < ref_image.cols() && y < ref_image.rows() {
-            let color = ref_image.at_2d::<opencv::core::Vec3b>(y, x).unwrap();
-            point.color = Some((color[2], color[1], color[0])); // BGR -> RGB
-        }
-    }
-}
-
-pub fn undistort_points_single_camera(
-    points: &Mat, // Nx2, CV_64F
-    camera: &CameraParameters,
-) -> Result<Mat, Error> {
-    let num_points = points.rows();
-    let mut undistorted_points = Mat::zeros(num_points, 1, opencv::core::CV_64FC2)?.to_mat()?;
-
-    undistort_points(
-        points,
-        &mut undistorted_points,
-        &camera.intrinsic,
-        &camera.distortion,
-        &Mat::default(),
-        &camera.intrinsic,
-    )?;
-
-    let mut undistorted_nx2 = Mat::zeros(num_points, 2, opencv::core::CV_64F)?.to_mat()?;
-    for j in 0..num_points {
-        let pt = undistorted_points.at_2d::<Vec2d>(j, 0)?;
-        *undistorted_nx2.at_2d_mut::<f64>(j, 0)? = pt[0];
-        *undistorted_nx2.at_2d_mut::<f64>(j, 1)? = pt[1];
-    }
-    Ok(undistorted_nx2)
+    // Фильтруем, оставляя только общие точки
+    all_matches
+        .iter()
+        .map(|cam| {
+            cam.iter()
+                .filter(|m| common_ref_indices.contains(&m.ref_idx))
+                .cloned()
+                .collect()
+        })
+        .collect()
 }
