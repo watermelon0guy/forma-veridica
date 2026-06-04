@@ -284,3 +284,36 @@ pub fn min_visible_match_set(
         })
         .collect()
 }
+
+/// Извлекает 2D-координаты из отфильтрованных матчей.
+/// Возвращает points[cam][point_idx].
+pub fn gather_points_2d_from_matches(
+    all_matches: &[Vec<FeatureMatch>],
+    all_keypoints: &[Vec<KeyPoint>],
+) -> Vec<Vec<Point2<f64>>> {
+    let num_cameras = all_keypoints.len();
+    let num_matches = all_matches[0].len();
+
+    let mut points_2d: Vec<Vec<Point2<f64>>> = Vec::with_capacity(num_cameras);
+
+    // Камера 0 — референсная: координаты по ref_idx
+    let mut cam0_points: Vec<Point2<f64>> = Vec::with_capacity(num_matches);
+    for m in &all_matches[0] {
+        let kp = &all_keypoints[0][m.ref_idx];
+        cam0_points.push(Point2::new(kp.x as f64, kp.y as f64));
+    }
+    points_2d.push(cam0_points);
+
+    // Камеры 1..N: координаты по cam_idx
+    for (cam_i, cam_matches) in all_matches.iter().enumerate() {
+        let actual_cam = cam_i + 1;
+        let mut cam_points: Vec<Point2<f64>> = Vec::with_capacity(num_matches);
+        for m in cam_matches {
+            let kp = &all_keypoints[actual_cam][m.cam_idx];
+            cam_points.push(Point2::new(kp.x as f64, kp.y as f64));
+        }
+        points_2d.push(cam_points);
+    }
+
+    points_2d
+}
