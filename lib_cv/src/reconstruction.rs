@@ -317,3 +317,130 @@ pub fn gather_points_2d_from_matches(
 
     points_2d
 }
+
+/// Копирует цвет из референсного изображения (камера 0) в облако точек.
+/// Использует исходные (искажённые) пиксельные координаты для lookup.
+pub fn add_color_to_point_cloud(
+    cloud: &mut PointCloud,
+    points_2d_cam0: &[Point2<f64>],
+    ref_image: &image::DynamicImage,
+) {
+    let rgb = ref_image.to_rgb8();
+    let (w, h) = rgb.dimensions();
+
+    for (i, point) in cloud.points.iter_mut().enumerate() {
+        let x = points_2d_cam0[i].x as u32;
+        let y = points_2d_cam0[i].y as u32;
+        if x < w && y < h {
+            let pixel = rgb.get_pixel(x, y);
+            point.color = Some((pixel[0], pixel[1], pixel[2]));
+        }
+    }
+}
+
+/// Удаляет точки с уверенностью ниже порога.
+pub fn filter_point_cloud_by_confidence(cloud: &mut PointCloud, threshold: f32) {
+    cloud.points.retain(|p| p.confidence >= threshold);
+}
+
+/// Сохраняет облако точек в формате PLY (Point Cloud Library).
+pub fn save_point_cloud<P: AsRef<std::path::Path>>(
+    cloud: &PointCloud,
+    path: P,
+) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut file = std::fs::File::create(path)?;
+
+    let has_color = cloud.points.iter().any(|p| p.color.is_some());
+
+    writeln!(file, "ply")?;
+    writeln!(file, "format ascii 1.0")?;
+    writeln!(file, "element vertex {}", cloud.points.len())?;
+    writeln!(file, "property float x")?;
+    writeln!(file, "property float y")?;
+    writeln!(file, "property float z")?;
+    if has_color {
+        writeln!(file, "property uchar red")?;
+        writeln!(file, "property uchar green")?;
+        writeln!(file, "property uchar blue")?;
+    }
+    writeln!(file, "property float confidence")?;
+    writeln!(file, "end_header")?;
+
+    for point in &cloud.points {
+        if has_color {
+            let (r, g, b) = point.color.unwrap_or((128, 128, 128));
+            writeln!(
+                file,
+                "{} {} {} {} {} {} {}",
+                point.p.x, point.p.y, point.p.z, r, g, b, point.confidence
+            )?;
+        } else {
+            writeln!(
+                file,
+                "{} {} {} {}",
+                point.p.x, point.p.y, point.p.z, point.confidence
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Трекинг точек между двумя кадрами для всех камер через Lucas-Kanade.
+/// Для каждой камеры независимо: строит пирамиды, запускает optical flow,
+/// возвращает новые координаты. Не фильтрует «потерянные» точки —
+/// плохие будут отсеяны на этапе триангуляции по reprojection error.
+pub fn track_points_optical_flow_all(
+    prev_frames: &[image::GrayImage],
+    curr_frames: &[image::GrayImage],
+    prev_points: &[Vec<Point2<f64>>],
+    window_size: usize,
+    max_iterations: usize,
+    pyramid_levels: usize,
+) -> Vec<Vec<Point2<f64>>> {
+    use optical_flow_lk::{build_pyramid, calc_optical_flow};
+
+    let num_cameras = prev_frames.len();
+    let mut all_new_points: Vec<Vec<Point2<f64>>> = Vec::with_capacity(num_cameras);
+
+    for cam_i in 0..num_cameras {
+        let prev_pyramid = build_pyramid(&prev_frames[cam_i], pyramid_levels);
+        let curr_pyramid = build_pyramid(&curr_frames[cam_i], pyramid_levels);
+
+        // Point2<f64> -> (f32, f32) для optical flow
+        let prev_f32: Vec<(f32, f32)> = prev_points[cam_i]
+            .iter()
+            .map(|p| (p.x as f32, p.y as f32))
+            .collect();
+
+        let new_f32 = calc_optical_flow(
+            &prev_pyramid,
+            &curr_pyramid,
+            &prev_f32,
+            window_size,
+            max_iterations,
+        );
+
+        // (f32, f32) -> Point2<f64>
+        let new_points: Vec<Point2<f64>> = new_f32
+            .into_iter()
+            .map(|(x, y)| Point2::new(x as f64, y as f64))
+            .collect();
+
+        let (w, h) = curr_frames[cam_i].dimensions();
+        let in_bounds = new_points
+            .iter()
+            .filter(|p| p.x >= 0.0 && p.y >= 0.0 && p.x < w as f64 && p.y < h as f64)
+            .count();
+        debug!(
+            "Камера {cam_i}: отслежено {}/{} точек в границах кадра",
+            in_bounds,
+            new_points.len()
+        );
+
+        all_new_points.push(new_points);
+    }
+
+    all_new_points
+}
