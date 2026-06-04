@@ -1,0 +1,67 @@
+use std::sync::mpsc::TryRecvError;
+
+use eframe::egui::{CentralPanel, Ui};
+
+use crate::app::ReconstructionApp;
+
+pub fn process_screen(app: &mut ReconstructionApp, ui: &mut Ui) {
+    CentralPanel::default().show_inside(ui, |ui| {
+        // Запускаем поток, если ещё не запущен
+        if app.pipeline_thread.is_none()
+            && app.pipeline_result_rx.is_none()
+            && app.pipeline_result.is_none()
+        {
+            app.start_pipeline_thread();
+        }
+
+        // Проверяем результат
+        if let Some(ref rx) = app.pipeline_result_rx {
+            match rx.try_recv() {
+                Ok(Ok(())) => {
+                    app.pipeline_result = Some(Ok(()));
+                    app.pipeline_thread = None;
+                    app.pipeline_result_rx = None;
+                }
+                Ok(Err(e)) => {
+                    app.pipeline_result = Some(Err(e));
+                    app.pipeline_thread = None;
+                    app.pipeline_result_rx = None;
+                }
+                Err(TryRecvError::Empty) => {
+                    // Ещё работает
+                }
+                Err(TryRecvError::Disconnected) => {
+                    app.pipeline_thread = None;
+                    app.pipeline_result_rx = None;
+                }
+            }
+        }
+
+        ui.vertical_centered(|ui| {
+            ui.add_space(50.0);
+
+            if app.pipeline_thread.is_some() || app.pipeline_result_rx.is_some() {
+                ui.heading("Выполняется реконструкция...");
+                ui.add_space(20.0);
+                ui.spinner();
+                ui.add_space(10.0);
+                ui.label("Обработка кадров, сохранение PLY-файлов в point_clouds/");
+            } else if let Some(ref result) = app.pipeline_result {
+                match result {
+                    Ok(()) => {
+                        ui.heading("Реконструкция завершена!");
+                        ui.add_space(10.0);
+                        ui.label("Облака точек сохранены в папку point_clouds/");
+                    }
+                    Err(e) => {
+                        ui.heading("Ошибка реконструкции");
+                        ui.add_space(10.0);
+                        ui.colored_label(eframe::egui::Color32::RED, e);
+                    }
+                }
+            } else {
+                ui.heading("Подготовка...");
+            }
+        });
+    });
+}

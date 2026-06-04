@@ -56,18 +56,21 @@ pub fn build_projection_matrices(export: &RigExtrinsicsExport) -> Vec<Matrix3x4<
     projections
 }
 
-/// Убирает дисторсию: пиксельные координаты -> нормализованные (z = 1).
-/// Использует полный обратный ход модели камеры.
+/// Убирает дисторсию: пиксельные координаты → неискажённые пиксельные.
+/// Обратный ход: K⁻¹ → undistort → K (без дисторсии).
 pub fn undistort_points(
     points_px: &[Point2<f64>], // N искажённых пикселей
     camera: &PinholeCamera,
 ) -> Vec<Point2<f64>> {
-    // N неискажённых нормализованных
+    // N неискажённых пикселей
+    let k = camera.k.k_matrix();
     points_px
         .iter()
         .map(|px| {
             let ray = camera.backproject_pixel(px);
-            Point2::new(ray.point.x, ray.point.y)
+            // ray.point = (x_norm, y_norm, 1.0) — неискажённые нормализованные
+            let pixel = k * ray.point; // K · (x, y, 1) → (u_undist, v_undist, 1)
+            Point2::new(pixel.x, pixel.y)
         })
         .collect()
 }

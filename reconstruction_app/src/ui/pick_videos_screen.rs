@@ -21,7 +21,7 @@ pub fn pick_videos_screen(app: &mut ReconstructionApp, ui: &mut Ui) {
             };
 
             if app.video_paths.len() == num_cameras {
-                let to_align_button = Button::new("Перейти к калибровке");
+                let to_align_button = Button::new("Перейти к реконструкции");
                 if ui.add(to_align_button).clicked() {
                     app.state = PipelineState::ReadyToProcess;
                 }
