@@ -31,6 +31,7 @@ pub(crate) struct CalibrationApp {
     pub(crate) offset_in_seconds: Vec<f64>,
     pub(crate) _rigs: Vec<RigView<NoMeta>>,
     pub(crate) charuco_target_spec: CharucoTargetSpec,
+    pub(crate) charuco_square_size: f64,
     pub(crate) charuco_board: CharucoBoard,
     pub(crate) charuco_board_texture_handle: Option<TextureHandle>,
     pub(crate) last_detected_frame_with_charuco: Vec<Option<FrameWithCharucoData>>,
@@ -40,6 +41,7 @@ pub(crate) struct CalibrationApp {
     pub(crate) calibration_result_rx: Option<mpsc::Receiver<Result<RigExtrinsicsExport, String>>>,
     pub(crate) calibration_thread: Option<std::thread::JoinHandle<()>>,
     pub(crate) calibration_result: Option<RigExtrinsicsExport>,
+    pub(crate) calibration_error: Option<String>,
 }
 
 #[derive(Default)]
@@ -90,6 +92,8 @@ impl Default for CalibrationApp {
             calibration_result_rx: None,
             calibration_thread: None,
             calibration_result: None,
+            calibration_error: None,
+            charuco_square_size: 20.0,
         }
     }
 }
@@ -134,6 +138,7 @@ impl CalibrationApp {
     }
 
     pub(crate) fn update_board_from_spec(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        self.charuco_target_spec.square_size_mm = self.charuco_square_size;
         self.charuco_board = CharucoBoard::new(self.charuco_target_spec.to_board_spec())?;
         Ok(())
     }

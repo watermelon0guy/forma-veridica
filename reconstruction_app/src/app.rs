@@ -188,7 +188,7 @@ fn run_pipeline_in_thread(
     add_color_to_point_cloud(&mut cloud, &points_2d[0], &first_frames[0]);
 
     let before = cloud.points.len();
-    filter_point_cloud_by_confidence(&mut cloud, 0.25);
+    filter_point_cloud_by_confidence(&mut cloud, 0.05);
     info!(
         "Кадр 0: отфильтровано {} точек, оставлено {}",
         before - cloud.points.len(),
@@ -243,7 +243,7 @@ fn run_pipeline_in_thread(
 
         add_color_to_point_cloud(&mut cloud, &new_points[0], &curr_frames[0]);
 
-        filter_point_cloud_by_confidence(&mut cloud, 0.25);
+        filter_point_cloud_by_confidence(&mut cloud, 0.05);
 
         save_point_cloud(&cloud, format!("point_clouds/frame_{frame_idx:04}.ply"))
             .map_err(|e| e.to_string())?;

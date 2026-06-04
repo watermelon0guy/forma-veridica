@@ -5,13 +5,16 @@ use calib_targets::{
     printable::{PageOrientation, PageSize, PageSpec},
 };
 use eframe::egui::{ComboBox, Panel, Slider, SliderClamping, TextureOptions, Ui};
-use image::DynamicImage;
+use image::ImageFormat;
 
 use crate::app::{CalibrationApp, CalibrationStep, charuco_target_spec_to_dynamic_image};
 use lib_cv::video::{dynamic_image_to_color_image, set_color_image_to_texture_handle};
 
 pub fn charuco_board_screen(app: &mut CalibrationApp, ui: &mut Ui) {
     let dict_len = app.charuco_target_spec.dictionary.codes.len() as u32;
+
+    let page_margin_mm = 10.0;
+
     Panel::left("parameters").show_inside(ui, |ui| {
         ui.add(
             Slider::new(
@@ -42,8 +45,8 @@ pub fn charuco_board_screen(app: &mut CalibrationApp, ui: &mut Ui) {
         );
         ui.add(
             Slider::new(
-                &mut app.charuco_target_spec.square_size_mm,
-                RangeInclusive::new(10.0, 100.0),
+                &mut app.charuco_square_size,
+                RangeInclusive::new(5.0, 100.0),
             )
             .update_while_editing(false)
             .text("Размер квадрата")
@@ -71,45 +74,79 @@ pub fn charuco_board_screen(app: &mut CalibrationApp, ui: &mut Ui) {
         if ui.button("Продолжить").clicked() {
             if let Ok(()) = app.update_board_from_spec() {
                 app.state = CalibrationStep::PickVideos;
+                return;
+            }
+        }
+
+        ui.separator();
+
+        if ui.button("Сохранить как PNG").clicked() {
+            if let Some(path) = rfd::FileDialog::new()
+                .set_title("Сохранить паттерн как PNG")
+                .add_filter("PNG", &["png"])
+                .set_file_name("charuco_board.png")
+                .save_file()
+            {
+                let save_page_spec = PageSpec {
+                    size: PageSize::Custom {
+                        width_mm: app.charuco_target_spec.square_size_mm
+                            * app.charuco_target_spec.cols as f64
+                            + page_margin_mm * 2.0,
+                        height_mm: app.charuco_target_spec.square_size_mm
+                            * app.charuco_target_spec.rows as f64
+                            + page_margin_mm * 2.0,
+                    },
+                    orientation: PageOrientation::Portrait,
+                    margin_mm: page_margin_mm,
+                };
+                match charuco_target_spec_to_dynamic_image(
+                    &app.charuco_target_spec,
+                    300,
+                    save_page_spec,
+                ) {
+                    Ok(image) => {
+                        if let Err(e) = image.save_with_format(&path, ImageFormat::Png) {
+                            log::error!("Ошибка сохранения PNG: {e}");
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("Ошибка генерации изображения: {e}");
+                    }
+                }
             }
         }
     });
 
-    let page_margin_mm = 10.0;
-    let page_size = PageSize::Custom {
-        width_mm: app.charuco_target_spec.square_size_mm * app.charuco_target_spec.cols as f64
-            + page_margin_mm * 2.0,
-        height_mm: app.charuco_target_spec.square_size_mm * app.charuco_target_spec.rows as f64
-            + page_margin_mm * 2.0,
-    };
-
     let page_spec = PageSpec {
-        size: page_size,
+        size: PageSize::Custom {
+            width_mm: app.charuco_target_spec.square_size_mm * app.charuco_target_spec.cols as f64
+                + page_margin_mm * 2.0,
+            height_mm: app.charuco_target_spec.square_size_mm * app.charuco_target_spec.rows as f64
+                + page_margin_mm * 2.0,
+        },
         orientation: PageOrientation::Portrait,
         margin_mm: page_margin_mm,
     };
 
     eframe::egui::CentralPanel::default().show_inside(ui, |ui| {
-        match &mut app.charuco_board_texture_handle {
-            Some(texture) => {
-                let image =
-                    charuco_target_spec_to_dynamic_image(&app.charuco_target_spec, 60, page_spec)
-                        .unwrap_or(DynamicImage::default());
-                set_color_image_to_texture_handle(&image, texture);
-                let texture_ref = &*texture;
-                ui.centered_and_justified(|ui| {
-                    ui.add(eframe::egui::Image::from_texture(texture_ref).shrink_to_fit())
-                });
-            }
-            None => {
-                let image =
-                    charuco_target_spec_to_dynamic_image(&app.charuco_target_spec, 60, page_spec)
-                        .unwrap_or(DynamicImage::default());
-                app.charuco_board_texture_handle = Some(ui.ctx().load_texture(
-                    "charuco_board",
-                    dynamic_image_to_color_image(&image),
-                    TextureOptions::default(),
-                ));
+        if let Ok(image) =
+            charuco_target_spec_to_dynamic_image(&app.charuco_target_spec, 60, page_spec)
+        {
+            match &mut app.charuco_board_texture_handle {
+                Some(texture) => {
+                    set_color_image_to_texture_handle(&image, texture);
+                    let texture_ref = &*texture;
+                    ui.centered_and_justified(|ui| {
+                        ui.add(eframe::egui::Image::from_texture(texture_ref).shrink_to_fit())
+                    });
+                }
+                None => {
+                    app.charuco_board_texture_handle = Some(ui.ctx().load_texture(
+                        "charuco_board",
+                        dynamic_image_to_color_image(&image),
+                        TextureOptions::default(),
+                    ));
+                }
             }
         }
     });

@@ -1,4 +1,4 @@
-use eframe::egui::{CentralPanel, ProgressBar, Ui};
+use eframe::egui::{CentralPanel, ProgressBar, RichText, Ui};
 
 use crate::app::CalibrationApp;
 
@@ -9,6 +9,7 @@ pub fn calibration_screen(app: &mut CalibrationApp, ui: &mut Ui) {
         if app.calibration_thread.is_none()
             && app.calibration_result_rx.is_none()
             && app.calibration_result.is_none()
+            && app.calibration_error.is_none()
         {
             app.start_calibration_thread();
         }
@@ -20,8 +21,9 @@ pub fn calibration_screen(app: &mut CalibrationApp, ui: &mut Ui) {
                     app.calibration_thread = None;
                     app.calibration_result_rx = None;
                 }
-                Ok(Err(_)) => {
-                    // При ошибке тоже чистим
+                Ok(Err(err)) => {
+                    log::error!("Ошибка калибровки: {err}");
+                    app.calibration_error = Some(err);
                     app.calibration_thread = None;
                     app.calibration_result_rx = None;
                 }
@@ -51,22 +53,28 @@ pub fn calibration_screen(app: &mut CalibrationApp, ui: &mut Ui) {
                     .desired_width(400.0);
 
                 ui.add(progress_bar);
-            } else if let Some(ref _result) = app.calibration_result {
+            } else if let Some(ref result) = app.calibration_result {
                 // Калибровка завершена
                 ui.heading("Калибровка завершена!");
                 ui.add_space(30.0);
 
                 if ui.button("Сохранить результат").clicked() {
-                    if let Some(ref result) = app.calibration_result {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("yaml", &["yml", "yaml"])
-                            .save_file()
-                        {
-                            if let Ok(yaml) = serde_yml::to_string(result) {
-                                let _ = std::fs::write(&path.with_extension("yaml"), yaml);
-                            }
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("yaml", &["yml", "yaml"])
+                        .save_file()
+                    {
+                        if let Ok(yaml) = serde_yml::to_string(result) {
+                            let _ = std::fs::write(&path.with_extension("yaml"), yaml);
                         }
                     }
+                }
+            } else if let Some(ref err) = app.calibration_error {
+                ui.heading(RichText::new("Ошибка калибровки").color(eframe::egui::Color32::RED));
+                ui.add_space(10.0);
+                ui.label(err);
+                ui.add_space(20.0);
+                if ui.button("Вернуться к настройке").clicked() {
+                    app.state = crate::app::CalibrationStep::SetupCharucoBoard;
                 }
             } else {
                 ui.heading("Подготовка...");

@@ -144,6 +144,10 @@ pub fn triangulate_points_multiple(
     Ok(result)
 }
 
+/// Порог reprojection error для confidence (пиксели).
+/// Точки с ошибкой выше этого получают confidence = 0.
+const REPROJ_THRESHOLD_PX: f64 = 25.0;
+
 fn triangulate_points(
     points_2d: &[Vec<Point2<f64>>],
     projection_matrices: &[Matrix3x4<f64>],
@@ -199,7 +203,7 @@ fn triangulate_points(
         }
 
         let avg_error = total_error / num_cameras as f64;
-        let confidence = (1.0 - (avg_error / 5.0).min(1.0)) as f32;
+        let confidence = (1.0 - (avg_error / REPROJ_THRESHOLD_PX).min(1.0)) as f32;
 
         // Логируем первые 5 точек для диагностики
         if pt_i < 5 {
