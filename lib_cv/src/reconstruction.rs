@@ -146,7 +146,7 @@ pub fn triangulate_points_multiple(
 
 /// Порог reprojection error для confidence (пиксели).
 /// Точки с ошибкой выше этого получают confidence = 0.
-const REPROJ_THRESHOLD_PX: f64 = 25.0;
+const REPROJ_THRESHOLD_PX: f64 = 5.0;
 
 fn triangulate_points(
     points_2d: &[Vec<Point2<f64>>],
@@ -280,16 +280,15 @@ pub fn match_first_camera_features_to_all(
     let ref_tree: ImmutableKdTree<f32, usize, SIFT_DIM, 32> =
         ImmutableKdTree::new_from_slice(&ref_arrays);
 
-    let ratio_threshold: f32 = 0.6; // жёстче фильтр
+    let ratio_threshold: f32 = 0.75;
 
-    // 3. Для каждой камеры i >= 1: двунаправленный matching
+    // 3. Для каждой камеры i >= 1: прямой matching
     let mut all_matches: Vec<Vec<FeatureMatch>> = Vec::with_capacity(num_cameras - 1);
 
     for cam_i in 1..num_cameras {
         let cam_descriptors = &all_descriptors[cam_i];
         let mut cam_matches: Vec<FeatureMatch> = Vec::new();
 
-        // Прямой поиск: cam_i -> camera 0
         for (cam_idx, desc) in cam_descriptors.iter().enumerate() {
             let neighbors = ref_tree
                 .nearest_n::<SquaredEuclidean>(&to_fixed_array(desc), NonZero::new(2).unwrap());
@@ -305,32 +304,12 @@ pub fn match_first_camera_features_to_all(
             }
         }
 
-        // Обратный поиск: camera 0 -> cam_i (взаимная проверка)
-        let cam_arrays: Vec<[f32; SIFT_DIM]> =
-            cam_descriptors.iter().map(|d| to_fixed_array(d)).collect();
-        let cam_tree: ImmutableKdTree<f32, usize, SIFT_DIM, 32> =
-            ImmutableKdTree::new_from_slice(&cam_arrays);
-
-        // Взаимная проверка: для каждого прямого матча проверяем обратный
-        let mut reciprocal_matches: Vec<FeatureMatch> = Vec::new();
-        let ref_desc_all = &all_descriptors[0];
-        for m in &cam_matches {
-            let ref_desc = &ref_desc_all[m.ref_idx];
-            let back_neighbors = cam_tree
-                .nearest_n::<SquaredEuclidean>(&to_fixed_array(ref_desc), NonZero::new(1).unwrap());
-
-            if !back_neighbors.is_empty() && back_neighbors[0].item as usize == m.cam_idx {
-                reciprocal_matches.push(m.clone());
-            }
-        }
-
         info!(
-            "Камера 0 ↔ камера {cam_i}: {}/{} совпадений (взаимных), до проверки: {}",
-            reciprocal_matches.len(),
-            cam_descriptors.len(),
-            cam_matches.len()
+            "Камера 0 <-> камера {cam_i}: {} совпадений (из {})",
+            cam_matches.len(),
+            cam_descriptors.len()
         );
-        all_matches.push(reciprocal_matches);
+        all_matches.push(cam_matches);
     }
 
     (all_matches, all_keypoints, all_descriptors)

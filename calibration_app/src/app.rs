@@ -248,7 +248,7 @@ fn run_calibration_in_thread(
                 p.percent = player.current_frame() as f32 / total_frames as f32;
             }
             cams_imgs.push(player.dynamic_image().to_luma8());
-            if let Err(_) = &player.rewind_forward(20) {
+            if let Err(_) = &player.rewind_forward(5) {
                 info!("Видео закончилось");
                 reading_vids = false;
             };

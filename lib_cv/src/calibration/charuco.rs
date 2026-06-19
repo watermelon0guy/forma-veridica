@@ -237,7 +237,7 @@ pub fn detect_aruco_markers(
         height: img.height() as usize,
         data: img.as_raw(),
     };
-    let matcher = Matcher::new(*dict, dict.max_correction_bits);
+    let matcher = Matcher::new(*dict, dict.max_correction_bits());
 
     let mut perimeters: Vec<f32> = quads
         .iter()

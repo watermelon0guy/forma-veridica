@@ -29,7 +29,7 @@ pub fn draw_charuco_detection(img: &DynamicImage, result: &CharucoDetectionResul
     let mut img = img.to_rgba8();
 
     // Рисуем углы Charuco зелёным крестиком
-    for corner in &result.detection.corners {
+    for corner in &result.corners {
         let x = corner.position.x as i32;
         let y = corner.position.y as i32;
         draw_hollow_circle_mut(&mut img, (x, y), 10, Rgba([255, 0, 0, 255]));

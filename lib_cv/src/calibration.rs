@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
 use calib_targets::{
-    LabeledCorner, TargetDetection, TargetKind,
+    GridCoords,
     aruco::MarkerDetection,
-    charuco::{CharucoBoard, CharucoDetectionResult, CharucoParams},
+    charuco::{CharucoBoard, CharucoCorner, CharucoDetectionResult, CharucoParams},
     core::GridAlignment,
     detect::detect_charuco_best,
 };
@@ -12,10 +12,9 @@ use log::{debug, error, info, warn};
 use nalgebra::{Point2, Point3};
 use vision_calibration::{
     core::{CorrespondenceView, NoMeta, PlanarDataset, RigView, RigViewObs, View},
-    optim::RigExtrinsicsDataset,
     planar_intrinsics::{FilterOptions, run_calibration_with_filtering},
     prelude::PlanarIntrinsicsProblem,
-    rig_extrinsics::{RigExtrinsicsExport, run_calibration},
+    rig_extrinsics::{RigExtrinsicsExport, RigExtrinsicsInput, run_calibration},
     session::CalibrationSession,
 };
 use vision_calibration::{
@@ -62,35 +61,34 @@ fn convert_to_charuco_result(
     corners: &[(usize, Point2<f32>)],
     markers: Vec<MarkerDetection>,
 ) -> CharucoDetectionResult {
-    let mut labeled_corners = Vec::with_capacity(corners.len());
-
-    for (corner_id, pixel_pos) in corners {
-        let corner_id = *corner_id as u32;
-
-        // 3D-позиция угла на доске (уже всё считается через board)
-        let target_position = board.charuco_object_xy(corner_id);
-
-        labeled_corners.push(LabeledCorner {
-            position: *pixel_pos,
-            grid: None,
-            id: Some(corner_id),
-            target_position,
-            score: 1.0,
-        });
+    // Строим обратный маппинг corner_id -> (i, j) для GridCoords
+    let mut id_to_grid: std::collections::HashMap<u32, GridCoords> =
+        std::collections::HashMap::new();
+    for i in 0..board.expected_inner_rows() as i32 {
+        for j in 0..board.expected_inner_cols() as i32 {
+            if let Some(cid) = board.charuco_corner_id_from_board_corner(i, j) {
+                id_to_grid.insert(cid, GridCoords { i, j });
+            }
+        }
     }
 
-    let markers_count = markers.len();
+    let charuco_corners: Vec<CharucoCorner> = corners
+        .iter()
+        .filter_map(|(corner_id, pixel_pos)| {
+            let corner_id = *corner_id as u32;
+            let target_position = board.charuco_object_xy(corner_id)?;
+            let grid = id_to_grid.get(&corner_id)?;
+            Some(CharucoCorner::new(
+                *pixel_pos,
+                *grid,
+                corner_id,
+                target_position,
+                1.0, // score
+            ))
+        })
+        .collect();
 
-    CharucoDetectionResult {
-        detection: TargetDetection {
-            kind: TargetKind::Charuco,
-            corners: labeled_corners,
-        },
-        markers: markers,
-        alignment: GridAlignment::IDENTITY,
-        raw_marker_count: markers_count,
-        raw_marker_wrong_id_count: 0,
-    }
+    CharucoDetectionResult::new(charuco_corners, markers, GridAlignment::IDENTITY)
 }
 
 pub fn calibrate_with_charuco(
@@ -108,10 +106,8 @@ pub fn calibrate_with_charuco(
     let dataset = PlanarDataset::new(views)?;
     let _ = session.set_input(dataset);
 
-    let filter_option = FilterOptions {
-        max_reproj_error: 100.0, // почти не фильтруем при плохой начальной калибровке
-        ..FilterOptions::default()
-    };
+    let mut filter_option = FilterOptions::default();
+    filter_option.max_reproj_error = 100.0; // почти не фильтруем при плохой начальной калибровке
     let _ = run_calibration_with_filtering(&mut session, filter_option);
 
     let intrinsics = session.export()?;
@@ -129,23 +125,22 @@ fn correspondence_view_from_charuco(
             return None;
         }
     };
-    if charuco_detection.detection.corners.is_empty() {
+    if charuco_detection.corners.is_empty() {
         return None;
     }
     let mut points_3d: Vec<Point3<f64>> = Vec::new();
     let mut points_2d: Vec<Point2<f64>> = Vec::new();
-    for corner in &charuco_detection.detection.corners {
-        if let Some(target_position) = corner.target_position {
-            points_3d.push(Point3::new(
-                target_position.x as f64,
-                target_position.y as f64,
-                0.0,
-            ));
-            points_2d.push(Point2::new(
-                corner.position.x as f64,
-                corner.position.y as f64,
-            ));
-        }
+    for corner in &charuco_detection.corners {
+        let target_position = corner.target_position;
+        points_3d.push(Point3::new(
+            target_position.x as f64,
+            target_position.y as f64,
+            0.0,
+        ));
+        points_2d.push(Point2::new(
+            corner.position.x as f64,
+            corner.position.y as f64,
+        ));
     }
     debug!("ChArUco: {} углов найдено", points_3d.len());
     match CorrespondenceView::new(points_3d, points_2d) {
@@ -195,7 +190,7 @@ pub fn calibrate_multiple_with_charuco_from_images(
         rigs.push(rig_view);
     }
 
-    let rig_dataset = RigExtrinsicsDataset::new(rigs, num_cameras)?;
+    let rig_dataset = RigExtrinsicsInput::new(rigs, num_cameras)?;
 
     let mut session = CalibrationSession::<RigExtrinsicsProblem>::new();
     session.set_input(rig_dataset)?;
@@ -262,7 +257,7 @@ pub fn calibrate_multiple_with_charuco_from_rigs(
         return Err("Недостаточно камер".into());
     }
 
-    let rig_dataset = RigExtrinsicsDataset::new(rigs, num_cameras)?;
+    let rig_dataset = RigExtrinsicsInput::new(rigs, num_cameras)?;
 
     let mut session = CalibrationSession::<RigExtrinsicsProblem>::new();
     session.set_input(rig_dataset)?;

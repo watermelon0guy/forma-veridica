@@ -11,7 +11,7 @@ use crate::app::{CalibrationApp, CalibrationStep, charuco_target_spec_to_dynamic
 use lib_cv::video::{dynamic_image_to_color_image, set_color_image_to_texture_handle};
 
 pub fn charuco_board_screen(app: &mut CalibrationApp, ui: &mut Ui) {
-    let dict_len = app.charuco_target_spec.dictionary.codes.len() as u32;
+    let dict_len = app.charuco_target_spec.dictionary.codes().len() as u32;
 
     let page_margin_mm = 10.0;
 
@@ -53,13 +53,13 @@ pub fn charuco_board_screen(app: &mut CalibrationApp, ui: &mut Ui) {
             .clamping(SliderClamping::Always),
         );
         ComboBox::from_label("Наборы маркеров")
-            .selected_text(app.charuco_target_spec.dictionary.name)
+            .selected_text(app.charuco_target_spec.dictionary.name())
             .show_ui(ui, |ui| {
                 for d in BUILTIN_DICTIONARY_NAMES {
                     let dict_name = d.to_string();
                     if ui
                         .selectable_label(
-                            app.charuco_target_spec.dictionary.name == dict_name,
+                            app.charuco_target_spec.dictionary.name() == dict_name,
                             &dict_name,
                         )
                         .clicked()
