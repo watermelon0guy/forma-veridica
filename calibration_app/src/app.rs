@@ -254,7 +254,7 @@ fn run_calibration_in_thread(
             };
         }
         if reading_vids {
-            update_rigs(&mut img_rigs, cams_imgs, &charuco_board, 2, 8);
+            update_rigs(&mut img_rigs, cams_imgs, &charuco_board, 2, 15);
         }
     }
 

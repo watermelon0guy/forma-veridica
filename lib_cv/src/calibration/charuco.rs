@@ -445,10 +445,10 @@ fn refine_corner_lines(quad: &mut [Point2<f32>; 4], contour: &[Point2<i32>]) {
         corner_indices[j] = min_idx;
     }
 
-    // Группируем точки контура по сторонам
-    let mut current_side = 0;
+    // Группируем точки контура по сторонам.
+    // current_side = 4 - временная группа для точек до первого встреченного угла.
+    let mut current_side = 4;
     for i in 0..contour_f32.len() {
-        // Проверяем, не является ли текущая точка углом
         for j in 0..4 {
             if i == corner_indices[j] {
                 current_side = j;
@@ -458,11 +458,16 @@ fn refine_corner_lines(quad: &mut [Point2<f32>; 4], contour: &[Point2<i32>]) {
         side_points[current_side].push(contour_f32[i]);
     }
 
-    // Переносим временную группу (4) в соответствующую сторону
+    // Переносим временную группу в сторону последнего угла (по порядку обхода контура).
     if !side_points[4].is_empty() {
-        let target_side = current_side;
+        let last_quad = corner_indices
+            .iter()
+            .enumerate()
+            .max_by_key(|&(_, &idx)| idx)
+            .map(|(q, _)| q)
+            .unwrap_or(0);
         let temp_points: Vec<Point2<f32>> = side_points[4].drain(..).collect();
-        side_points[target_side].extend(temp_points);
+        side_points[last_quad].extend(temp_points);
     }
 
     // Определяем направление контура (по порядку индексов углов)

@@ -352,30 +352,49 @@ pub fn min_visible_match_set(
 }
 
 /// Извлекает 2D-координаты из отфильтрованных матчей.
-/// Возвращает points[cam][point_idx].
+/// Возвращает points[cam][point_idx], где все списки упорядочены
+/// одинаково - по возрастанию ref_idx.
 pub fn gather_points_2d_from_matches(
     all_matches: &[Vec<FeatureMatch>],
     all_keypoints: &[Vec<KeyPoint>],
 ) -> Vec<Vec<Point2<f64>>> {
     let num_cameras = all_keypoints.len();
-    let num_matches = all_matches[0].len();
+
+    // Собираем уникальные ref_idx в порядке возрастания.
+    let mut ref_indices: Vec<usize> = all_matches[0].iter().map(|m| m.ref_idx).collect();
+    ref_indices.sort();
+    ref_indices.dedup();
+
+    let num_matches = ref_indices.len();
+
+    // Строим маппинг ref_idx -> cam_idx для каждой камеры.
+    let mut cam_idx_maps: Vec<std::collections::HashMap<usize, usize>> =
+        Vec::with_capacity(num_cameras - 1);
+    for cam_matches in all_matches.iter() {
+        let mut map = std::collections::HashMap::new();
+        for m in cam_matches {
+            map.entry(m.ref_idx).or_insert(m.cam_idx);
+        }
+        cam_idx_maps.push(map);
+    }
 
     let mut points_2d: Vec<Vec<Point2<f64>>> = Vec::with_capacity(num_cameras);
 
-    // Камера 0 — референсная: координаты по ref_idx
+    // Камера 0 — референсная: координаты по ref_idx (одинаковый порядок).
     let mut cam0_points: Vec<Point2<f64>> = Vec::with_capacity(num_matches);
-    for m in &all_matches[0] {
-        let kp = &all_keypoints[0][m.ref_idx];
+    for &ref_idx in &ref_indices {
+        let kp = &all_keypoints[0][ref_idx];
         cam0_points.push(Point2::new(kp.x as f64, kp.y as f64));
     }
     points_2d.push(cam0_points);
 
-    // Камеры 1..N: координаты по cam_idx
-    for (cam_i, cam_matches) in all_matches.iter().enumerate() {
+    // Камеры 1..N: координаты по cam_idx, в том же порядке ref_idx.
+    for (cam_i, cam_map) in cam_idx_maps.iter().enumerate() {
         let actual_cam = cam_i + 1;
         let mut cam_points: Vec<Point2<f64>> = Vec::with_capacity(num_matches);
-        for m in cam_matches {
-            let kp = &all_keypoints[actual_cam][m.cam_idx];
+        for &ref_idx in &ref_indices {
+            let cam_idx = cam_map[&ref_idx];
+            let kp = &all_keypoints[actual_cam][cam_idx];
             cam_points.push(Point2::new(kp.x as f64, kp.y as f64));
         }
         points_2d.push(cam_points);
