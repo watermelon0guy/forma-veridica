@@ -13,10 +13,12 @@ use eframe::{
     egui::{Context, TextureHandle, TextureOptions},
 };
 use image::load_from_memory;
-use lib_cv::calibration::{calibrate_multiple_with_charuco_from_rigs, update_rigs};
+use lib_cv::calibration::{
+    calibrate_camera, calibrate_multiple_with_inrinsics, update_correspondes_views, update_rigs,
+};
 use log::{debug, error, info};
 use vision_calibration::{
-    core::{NoMeta, RigView},
+    core::{CorrespondenceView, NoMeta, RigView},
     rig_extrinsics::RigExtrinsicsExport,
 };
 
@@ -170,7 +172,6 @@ impl CalibrationApp {
                 charuco_board,
                 offsets,
                 Arc::clone(&progress),
-                // ctx, // для request_repaint()
             );
 
             // Отправляем результат назад
@@ -216,6 +217,9 @@ fn run_calibration_in_thread(
     // ctx: Context,
 ) -> Result<RigExtrinsicsExport, String> {
     let mut img_rigs: Vec<RigView<NoMeta>> = Vec::new();
+    // это набор обнаруженных точек на каждой камере ОТДЕЛЬНО
+    // они не сопоставлены между собой в отличии от img_rigs
+    let mut correspondence_views: Vec<Vec<Option<CorrespondenceView>>> = Vec::new();
 
     let mut video_players: Vec<VideoPlayer> = Vec::new();
     for path in &video_paths {
@@ -225,6 +229,7 @@ fn run_calibration_in_thread(
         }
     }
 
+    // Переходим к офсетам выбранным на шаге с выравниванием видео
     for (i, player) in video_players.iter_mut().enumerate() {
         if let Err(e) = player.seek_to_time(offsets[i]) {
             error!("Ошибка перехода к офсету: {}", e);
@@ -254,9 +259,30 @@ fn run_calibration_in_thread(
             };
         }
         if reading_vids {
-            update_rigs(&mut img_rigs, cams_imgs, &charuco_board, 2, 15);
+            update_rigs(&mut img_rigs, &cams_imgs, &charuco_board, 2, 8);
+            update_correspondes_views(&mut correspondence_views, &cams_imgs, &charuco_board, 8)
         }
     }
 
-    calibrate_multiple_with_charuco_from_rigs(img_rigs).map_err(|e| e.to_string())
+    // Транспонируем [frame][cam] -> [cam][frame]
+    let num_cameras = video_paths.len();
+    let mut cameras_intrinsics = Vec::new();
+    for cam_idx in 0..num_cameras {
+        let ccv: Vec<CorrespondenceView> = correspondence_views
+            .iter()
+            .filter_map(|frame| frame[cam_idx].clone())
+            .collect();
+        if ccv.is_empty() {
+            return Err(format!(
+                "Для камеры {cam_idx} нет данных: все обнаружения пусты"
+            ));
+        }
+        let intrinsic = match calibrate_camera(ccv) {
+            Ok(it) => it,
+            Err(err) => return Err(format!("Ошибка калибровки для камеры {cam_idx}: {err}")),
+        };
+        cameras_intrinsics.push(intrinsic);
+    }
+
+    calibrate_multiple_with_inrinsics(img_rigs, cameras_intrinsics).map_err(|e| e.to_string())
 }

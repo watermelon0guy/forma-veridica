@@ -11,11 +11,16 @@ use image::GrayImage;
 use log::{debug, error, info, warn};
 use nalgebra::{Point2, Point3};
 use vision_calibration::{
-    core::{CorrespondenceView, NoMeta, PlanarDataset, RigView, RigViewObs, View},
+    core::{
+        BrownConrady5, CorrespondenceView, FxFyCxCySkew, NoMeta, PlanarDataset, RigView,
+        RigViewObs, View,
+    },
     planar_intrinsics::{self, FilterOptions, PlanarIntrinsicsExport},
     prelude::PlanarIntrinsicsProblem,
     rig_extrinsics::{
-        self, RigExtrinsicsExport, RigExtrinsicsInput, RigExtrinsicsProblem, run_calibration,
+        self, RigExtrinsicsExport, RigExtrinsicsInput, RigExtrinsicsProblem,
+        RigIntrinsicsManualInit, run_calibration, step_intrinsics_init_all_with_seed,
+        step_intrinsics_optimize_all, step_rig_init, step_rig_optimize,
     },
     session::CalibrationSession,
 };
@@ -101,23 +106,16 @@ fn convert_to_charuco_result(
     CharucoDetectionResult::new(charuco_corners, markers, GridAlignment::IDENTITY)
 }
 
-pub fn calibrate_with_charuco(
-    imgs: &Vec<GrayImage>,
-    charuco_board: &CharucoBoard,
+pub fn calibrate_camera(
+    correspondence_views: Vec<CorrespondenceView>,
 ) -> Result<PlanarIntrinsicsExport, Box<dyn std::error::Error>> {
     let mut session = CalibrationSession::<PlanarIntrinsicsProblem>::new();
-    let mut views = Vec::new();
-    for img in imgs {
-        if let Some(correspondence_view) = correspondence_view_from_charuco(charuco_board, img) {
-            views.push(View::without_meta(correspondence_view));
-        };
-    }
-
+    let views = corr_views_to_view_no_meta(correspondence_views);
     let dataset = PlanarDataset::new(views)?;
     let _ = session.set_input(dataset);
 
     let mut filter_option = FilterOptions::default();
-    filter_option.max_reproj_error = 2.0; // почти не фильтруем при плохой начальной калибровке
+    filter_option.max_reproj_error = 2.0;
     let _ = planar_intrinsics::run_calibration_with_filtering(&mut session, filter_option);
 
     let intrinsics = session.export()?;
@@ -125,7 +123,7 @@ pub fn calibrate_with_charuco(
     Ok(intrinsics)
 }
 
-fn correspondence_view_from_charuco(
+pub fn correspondence_view_from_charuco(
     charuco_board: &CharucoBoard,
     img: &image::ImageBuffer<image::Luma<u8>, Vec<u8>>,
 ) -> Option<CorrespondenceView> {
@@ -160,6 +158,16 @@ fn correspondence_view_from_charuco(
             None
         }
     }
+}
+
+pub fn corr_views_to_view_no_meta(corr_views: Vec<CorrespondenceView>) -> Vec<View<NoMeta>> {
+    corr_views
+        .into_iter()
+        .map(|corr_view| View {
+            obs: corr_view,
+            meta: NoMeta,
+        })
+        .collect()
 }
 
 pub fn calibrate_multiple_with_charuco_from_images(
@@ -212,7 +220,7 @@ pub fn calibrate_multiple_with_charuco_from_images(
 
 pub fn update_rigs(
     rigs: &mut Vec<RigView<NoMeta>>,
-    cams_imgs: Vec<GrayImage>,
+    cams_imgs: &Vec<GrayImage>,
     charuco_board: &CharucoBoard,
     min_correspondences: usize,
     min_point_in_correspondence: usize,
@@ -247,7 +255,24 @@ pub fn update_rigs(
     }
 }
 
-pub fn calibrate_multiple_with_charuco_from_rigs(
+pub fn update_correspondes_views(
+    correspondence_views: &mut Vec<Vec<Option<CorrespondenceView>>>,
+    cams_imgs: &Vec<GrayImage>,
+    charuco_board: &CharucoBoard,
+    min_point_in_correspondence: usize,
+) {
+    let mut correspondences = Vec::new();
+    let num_cameras = cams_imgs.len();
+    for cam_idx in 0..num_cameras {
+        let correspondence = correspondence_view_from_charuco(charuco_board, &cams_imgs[cam_idx])
+            .filter(|c| c.points_2d.len() >= min_point_in_correspondence);
+        correspondences.push(correspondence);
+    }
+
+    correspondence_views.push(correspondences);
+}
+
+pub fn calibrate_multiple(
     rigs: Vec<RigView<NoMeta>>,
 ) -> Result<RigExtrinsicsExport, Box<dyn std::error::Error>> {
     debug!("Start multiple cameras calibration");
@@ -288,6 +313,47 @@ pub fn calibrate_multiple_with_charuco_from_rigs(
         );
     }
     info!("mean_reproj_error: {:.2} px", result.mean_reproj_error);
+
+    Ok(result)
+}
+
+pub fn calibrate_multiple_with_inrinsics(
+    rigs: Vec<RigView<NoMeta>>,
+    intrinsics: Vec<PlanarIntrinsicsExport>,
+) -> Result<RigExtrinsicsExport, Box<dyn std::error::Error>> {
+    debug!("Start multiple cameras calibration");
+    let num_cameras = match rigs.get(0) {
+        Some(it) => it,
+        None => return Err("Ошибка получения количества камер из наборов изображений".into()),
+    }
+    .obs
+    .cameras
+    .len();
+
+    let num_frames = rigs.len();
+    debug!("Камер: {num_cameras}, кадров: {num_frames}");
+
+    if num_cameras < 2 {
+        error!("Ошибка: для калибровки требуется как минимум 2 набора изображений.");
+        return Err("Недостаточно камер".into());
+    }
+
+    let rig_dataset = RigExtrinsicsInput::new(rigs, num_cameras)?;
+    let k_vec: Vec<FxFyCxCySkew<f64>> = intrinsics.iter().map(|r| r.params.camera.k).collect();
+    let d_vec: Vec<BrownConrady5<f64>> = intrinsics.iter().map(|r| r.params.camera.dist).collect();
+
+    let mut session = CalibrationSession::<RigExtrinsicsProblem>::new();
+    session.set_input(rig_dataset)?;
+
+    let mut manual = RigIntrinsicsManualInit::default();
+    manual.per_cam_intrinsics = Some(k_vec);
+    manual.per_cam_distortion = Some(d_vec);
+
+    step_intrinsics_init_all_with_seed(&mut session, manual, None)?;
+    step_intrinsics_optimize_all(&mut session, None)?; // опционально
+    step_rig_init(&mut session)?;
+    step_rig_optimize(&mut session, None)?;
+    let result: RigExtrinsicsExport = session.export()?;
 
     Ok(result)
 }

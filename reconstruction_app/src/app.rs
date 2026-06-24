@@ -106,7 +106,7 @@ impl ReconstructionApp {
         self.pipeline_thread = Some(handle);
     }
 
-    pub(crate) fn run_pipeline(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub(crate) fn _run_pipeline(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         run_pipeline_in_thread(
             self.video_paths.clone(),
             self.calibration_data.clone(),
