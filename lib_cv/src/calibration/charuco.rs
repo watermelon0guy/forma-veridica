@@ -233,6 +233,15 @@ pub fn detect_aruco_markers(
 
     dedup_quads(&mut quads);
 
+    // Отбрасываем quads, касающиеся границы изображения
+    let (iw, ih) = (img.width() as f32, img.height() as f32);
+    const BORDER: f32 = 3.0;
+    quads.retain(|q| {
+        q.corners
+            .iter()
+            .all(|c| c.x >= BORDER && c.y >= BORDER && c.x < iw - BORDER && c.y < ih - BORDER)
+    });
+
     // Уточнение углов: сначала через линии контура, потом cornerSubPix
     for quad in &mut quads {
         // 1. Уточнение через аппроксимацию линий (использует весь контур)
