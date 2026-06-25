@@ -21,19 +21,39 @@ pub struct QuadWithContour {
     pub contour: Vec<Point2<i32>>,
 }
 
-// После find_marker_quads: удалить quads с почти совпадающими центрами
-fn dedup_quads(quads: &mut Vec<QuadWithContour>, min_dist: f32) {
-    let mut kept = Vec::new();
+// After find_marker_quads: remove quads with nearly coincident centers.
+// Threshold is proportional to the smaller perimeter (0.125×), matching
+// OpenCV's minMarkerDistanceRate logic.
+fn dedup_quads(quads: &mut Vec<QuadWithContour>) {
+    let mut kept: Vec<QuadWithContour> = Vec::new();
     for quad in quads.drain(..) {
         let center = quad
             .corners
             .iter()
             .fold(Point2::origin(), |a, p| a + p.coords)
             / 4.0;
-        if kept.iter().all(|k: &QuadWithContour| {
+        let perimeter = {
+            let q = &quad.corners;
+            (q[1] - q[0]).norm()
+                + (q[2] - q[1]).norm()
+                + (q[3] - q[2]).norm()
+                + (q[0] - q[3]).norm()
+        };
+
+        let is_dup = kept.iter().any(|k: &QuadWithContour| {
             let kc = k.corners.iter().fold(Point2::origin(), |a, p| a + p.coords) / 4.0;
-            (center - kc).norm() >= min_dist
-        }) {
+            let kp = {
+                let q = &k.corners;
+                (q[1] - q[0]).norm()
+                    + (q[2] - q[1]).norm()
+                    + (q[3] - q[2]).norm()
+                    + (q[0] - q[3]).norm()
+            };
+            let threshold = perimeter.min(kp) * 0.125;
+            (center - kc).norm() < threshold
+        });
+
+        if !is_dup {
             kept.push(quad);
         }
     }
@@ -211,7 +231,7 @@ pub fn detect_aruco_markers(
         return Vec::new();
     }
 
-    dedup_quads(&mut quads, 5.0);
+    dedup_quads(&mut quads);
 
     // Уточнение углов: сначала через линии контура, потом cornerSubPix
     for quad in &mut quads {
