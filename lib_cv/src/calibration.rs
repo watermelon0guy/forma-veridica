@@ -26,7 +26,8 @@ use vision_calibration::{
 };
 
 use crate::calibration::charuco::{
-    build_marker_homographies, detect_aruco_markers, interpolate_charuco_corners,
+    build_marker_homographies, detect_aruco_markers, filter_bad_charuco_corners,
+    interpolate_charuco_corners, refine_charuco_corners,
 };
 
 pub mod charuco;
@@ -64,6 +65,8 @@ pub fn get_charuco_marker_first(
         return None;
     }
     let corners = interpolate_charuco_corners(charuco_board, &transforms, 2);
+    let mut corners = refine_charuco_corners(charuco_board, corners, &markers, img);
+    filter_bad_charuco_corners(charuco_board, &mut corners, &markers);
     if corners.is_empty() {
         None
     } else {
@@ -109,14 +112,15 @@ fn convert_to_charuco_result(
 pub fn calibrate_camera(
     correspondence_views: Vec<CorrespondenceView>,
 ) -> Result<PlanarIntrinsicsExport, Box<dyn std::error::Error>> {
+    debug!("Калибровка камеры: {} кадров", correspondence_views.len());
     let mut session = CalibrationSession::<PlanarIntrinsicsProblem>::new();
     let views = corr_views_to_view_no_meta(correspondence_views);
     let dataset = PlanarDataset::new(views)?;
-    let _ = session.set_input(dataset);
+    session.set_input(dataset)?;
 
     let mut filter_option = FilterOptions::default();
     filter_option.max_reproj_error = 2.0;
-    let _ = planar_intrinsics::run_calibration_with_filtering(&mut session, filter_option);
+    planar_intrinsics::run_calibration_with_filtering(&mut session, filter_option)?;
 
     let intrinsics = session.export()?;
 

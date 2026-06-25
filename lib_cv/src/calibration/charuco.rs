@@ -358,6 +358,193 @@ pub fn build_marker_homographies(
     transforms
 }
 
+/// Субпиксельное уточнение интерполированных углов доски ChArUco с помощью cornerSubPix.
+/// Вычисляет адаптивный размер окна на основе расстояния до ближайшего угла маркера,
+/// следуя логике OpenCV getMaximumSubPixWindowSizes + selectAndRefineChessboardCorners.
+/// Отбрасывает углы за пределами изображения (с отступом в 2 пикселя).
+pub fn refine_charuco_corners(
+    board: &CharucoBoard,
+    corners: Vec<(usize, Point2<f32>)>,
+    markers: &[MarkerDetection],
+    img: &GrayImage,
+) -> Vec<(usize, Point2<f32>)> {
+    let (w, h) = (img.width() as f32, img.height() as f32);
+    let min_dist_to_border: f32 = 2.0;
+
+    // Build mapping: corner_id -> Vec<marker_corners> from all detected markers
+    let mut corner_to_marker_corners: HashMap<usize, Vec<[Point2<f32>; 4]>> = HashMap::new();
+    for marker in markers {
+        let marker_corners = match marker.corners_img {
+            Some(c) => c,
+            None => continue,
+        };
+        if let Some(surrounding) = board.marker_surrounding_charuco_corners(marker.id as i32) {
+            for c_id in surrounding {
+                corner_to_marker_corners
+                    .entry(c_id)
+                    .or_default()
+                    .push(marker_corners);
+            }
+        }
+    }
+
+    let mut refined: Vec<(usize, Point2<f32>)> = Vec::with_capacity(corners.len());
+
+    for (corner_id, mut pt) in corners {
+        // Compute min distance to nearest marker corner
+        let min_dist = corner_to_marker_corners
+            .get(&corner_id)
+            .map(|marker_list| {
+                let mut md = f32::MAX;
+                for mc in marker_list {
+                    for corner in mc {
+                        let d = ((pt.x - corner.x).powi(2) + (pt.y - corner.y).powi(2)).sqrt();
+                        if d < md {
+                            md = d;
+                        }
+                    }
+                }
+                md
+            })
+            .unwrap_or(f32::MAX);
+
+        // WinSize = max(1, min(10, floor(minDist - 2)))
+        let win_size = if min_dist < f32::MAX {
+            let ws = (min_dist - 2.0) as i32;
+            ws.clamp(1, 10) as u32
+        } else {
+            5u32 // fallback when no surrounding markers found
+        };
+
+        // Apply cornerSubPix
+        refine_corner(img, &mut pt, win_size, -1, 30, 0.1);
+
+        // Filter: must be inside image with border margin
+        if pt.x >= min_dist_to_border
+            && pt.y >= min_dist_to_border
+            && pt.x < w - min_dist_to_border
+            && pt.y < h - min_dist_to_border
+        {
+            refined.push((corner_id, pt));
+        }
+    }
+
+    debug!(
+        "refine_charuco_corners: {} refined (from {} raw)",
+        refined.len(),
+        refined.capacity()
+    );
+    refined
+}
+
+/// Фильтрует геометрически непоследовательные углы ChArUco, следуя алгоритму
+/// checkBoard из OpenCV. Удаляет углы, которые находятся ближе к постороннему
+/// маркеру, чем к собственным родительским маркерам, или у которых ближайшая
+/// точка маркера является средней точкой стороны, а не углом.
+pub fn filter_bad_charuco_corners(
+    board: &CharucoBoard,
+    corners: &mut Vec<(usize, Point2<f32>)>,
+    markers: &[MarkerDetection],
+) {
+    if corners.len() < 4 || markers.len() < 2 {
+        corners.clear();
+        return;
+    }
+
+    // Build reverse mapping: corner_id → Vec<(marker_index, marker_corners)>
+    let mut corner_to_markers: HashMap<usize, Vec<(usize, [Point2<f32>; 4])>> = HashMap::new();
+    for (m_idx, marker) in markers.iter().enumerate() {
+        let mc = match marker.corners_img {
+            Some(c) => c,
+            None => continue,
+        };
+        if let Some(surrounding) = board.marker_surrounding_charuco_corners(marker.id as i32) {
+            for c_id in surrounding {
+                corner_to_markers.entry(c_id).or_default().push((m_idx, mc));
+            }
+        }
+    }
+
+    let before = corners.len();
+    corners.retain(|(corner_id, pt)| {
+        let parents = match corner_to_markers.get(corner_id) {
+            Some(v) if v.len() >= 2 => v,
+            _ => return true, // keep corners with too few parents (can't validate)
+        };
+
+        // ── 1. max distance to two parent marker corners ──
+        let mut max_dist_to_parents = 0.0f32;
+        let mut nearest_info: Vec<([Point2<f32>; 4], usize)> = Vec::new();
+
+        for parent_idx in 0..2.min(parents.len()) {
+            let mc = parents[parent_idx].1;
+            let mut min_d = f32::MAX;
+            let mut best_c_idx = 0usize;
+            for (c_idx, corner) in mc.iter().enumerate() {
+                let d = ((pt.x - corner.x).powi(2) + (pt.y - corner.y).powi(2)).sqrt();
+                if d < min_d {
+                    min_d = d;
+                    best_c_idx = c_idx;
+                }
+            }
+            max_dist_to_parents = max_dist_to_parents.max(min_d);
+            nearest_info.push((mc, best_c_idx));
+        }
+
+        // ── 2. min distance to OTHER markers' centers ──
+        let parent_indices: Vec<usize> = parents.iter().take(2).map(|(idx, _)| *idx).collect();
+        let mut min_dist_to_others = f32::MAX;
+        for (m_idx, marker) in markers.iter().enumerate() {
+            if parent_indices.contains(&m_idx) {
+                continue;
+            }
+            let mc = match marker.corners_img {
+                Some(c) => c,
+                None => continue,
+            };
+            let cx: f32 = mc.iter().map(|c| c.x).sum::<f32>() / 4.0;
+            let cy: f32 = mc.iter().map(|c| c.y).sum::<f32>() / 4.0;
+            let d = ((pt.x - cx).powi(2) + (pt.y - cy).powi(2)).sqrt();
+            if d < min_dist_to_others {
+                min_dist_to_others = d;
+            }
+        }
+
+        // ── 3. OpenCV check: closer to a stranger than to parents? ──
+        if max_dist_to_parents > min_dist_to_others {
+            return false; // remove this corner
+        }
+
+        // ── 4. Midpoint-of-side check ──
+        for (mc, c_idx) in &nearest_info {
+            let nc = mc[*c_idx];
+            let prev = mc[(*c_idx + 3) % 4];
+            let next = mc[(*c_idx + 1) % 4];
+
+            let mid_prev = Point2::new((nc.x + prev.x) / 2.0, (nc.y + prev.y) / 2.0);
+            let mid_next = Point2::new((nc.x + next.x) / 2.0, (nc.y + next.y) / 2.0);
+
+            let d_corner = ((pt.x - nc.x).powi(2) + (pt.y - nc.y).powi(2)).sqrt();
+            let d_mid_p = ((pt.x - mid_prev.x).powi(2) + (pt.y - mid_prev.y).powi(2)).sqrt();
+            let d_mid_n = ((pt.x - mid_next.x).powi(2) + (pt.y - mid_next.y).powi(2)).sqrt();
+
+            if d_mid_p < d_corner || d_mid_n < d_corner {
+                return false; // midpoint of a side is closer than the corner itself
+            }
+        }
+
+        true // corner is good, keep it
+    });
+
+    let removed = before - corners.len();
+    if removed > 0 {
+        debug!(
+            "filter_bad_charuco_corners: removed {}/{} bad corners",
+            removed, before
+        );
+    }
+}
+
 pub fn interpolate_charuco_corners(
     board: &CharucoBoard,
     transforms: &HashMap<u32, Homography>,
@@ -365,11 +552,15 @@ pub fn interpolate_charuco_corners(
 ) -> Vec<(usize, Point2<f32>)> {
     let mut corners = Vec::new();
 
-    let mut corner_to_homographies: HashMap<usize, Vec<&Homography>> = HashMap::new();
+    // Store (marker_id, homography) pairs so we can sort by marker_id
+    let mut corner_to_homographies: HashMap<usize, Vec<(u32, &Homography)>> = HashMap::new();
     for (marker_id, h) in transforms {
         if let Some(ids) = board.marker_surrounding_charuco_corners(*marker_id as i32) {
             for c_id in ids {
-                corner_to_homographies.entry(c_id).or_default().push(h);
+                corner_to_homographies
+                    .entry(c_id)
+                    .or_default()
+                    .push((*marker_id, h));
             }
         }
     }
@@ -386,19 +577,24 @@ pub fn interpolate_charuco_corners(
                 None => continue,
             };
 
-            let projections: Vec<_> = corner_to_homographies
+            // Collect projections, sorted by marker_id for deterministic ordering
+            let projections: Vec<Point2<f32>> = corner_to_homographies
                 .get(&corner_id)
-                .map(|hs| hs.iter().map(|h| h.apply(obj_xy)).collect())
+                .map(|hs| {
+                    let mut pairs: Vec<(u32, Point2<f32>)> =
+                        hs.iter().map(|(mid, h)| (*mid, h.apply(obj_xy))).collect();
+                    pairs.sort_by_key(|(mid, _)| *mid);
+                    pairs.into_iter().map(|(_, pt)| pt).collect()
+                })
                 .unwrap_or_default();
 
+            // Use at most 2 closest projections (matching OpenCV's nearestMarkerIdx[:2])
             if projections.len() >= min_markers {
-                let sum: Point2<f32> = projections
+                let n = projections.len().min(2);
+                let sum: Point2<f32> = projections[..n]
                     .iter()
                     .fold(Point2::origin(), |acc, p| acc + p.coords);
-                let avg = Point2::new(
-                    sum.x / projections.len() as f32,
-                    sum.y / projections.len() as f32,
-                );
+                let avg = Point2::new(sum.x / n as f32, sum.y / n as f32);
                 corners.push((corner_id, avg));
             }
         }
@@ -609,7 +805,7 @@ pub fn find_marker_quads(gray: &GrayImage) -> Vec<QuadWithContour> {
                 .map(|p| imageproc::point::Point::new(p.x, p.y))
                 .collect();
 
-            let epsilon = n as f64 * 0.05;
+            let epsilon = n as f64 * 0.03;
             let approx = approximate_polygon_dp(&pts, epsilon, true);
 
             if approx.len() != 4 || !is_contour_convex(&approx) {
