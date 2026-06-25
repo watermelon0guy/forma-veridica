@@ -272,8 +272,9 @@ pub fn detect_aruco_markers(
     perimeters.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let px_per_square = perimeters[perimeters.len() / 2] / 4.0;
 
-    // Фильтруем слишком мелкие quads
+    // Фильтруем слишком мелкие и слишком крупные quads
     let min_perimeter = px_per_square * 4.0 * 0.6;
+    let max_perimeter = px_per_square * 4.0 * 1.4;
     let filtered_cells: Vec<MarkerCell> = cells
         .into_iter()
         .filter(|cell| {
@@ -282,13 +283,15 @@ pub fn detect_aruco_markers(
             let d12 = (q[2] - q[1]).norm();
             let d23 = (q[3] - q[2]).norm();
             let d30 = (q[0] - q[3]).norm();
-            (d01 + d12 + d23 + d30) >= min_perimeter
+            let p = d01 + d12 + d23 + d30;
+            p >= min_perimeter && p <= max_perimeter
         })
         .collect();
     debug!(
-        "detect_aruco_markers: {} cells after size filter (min_perimeter={:.0})",
+        "detect_aruco_markers: {} cells after size filter (min={:.0}, max={:.0})",
         filtered_cells.len(),
-        min_perimeter
+        min_perimeter,
+        max_perimeter
     );
 
     if filtered_cells.is_empty() {
@@ -299,7 +302,7 @@ pub fn detect_aruco_markers(
         border_bits: 1,
         inset_frac: 0.04,
         marker_size_rel: 1.0,
-        min_border_score: 0.5,
+        min_border_score: 0.75,
         dedup_by_id: true,
         multi_threshold: true,
     };
