@@ -78,7 +78,7 @@ pub fn align_video_screen(app: &mut CalibrationApp, ui: &mut Ui) {
             });
         }
     }
-    CentralPanel::default().show_inside(ui, |ui| {
+    CentralPanel::default().show(ui, |ui| {
         Frame::NONE.show(ui, |ui| {
             let num_columns = ((total as f32).sqrt().ceil() as usize).min(total);
             let num_rows = (total + num_columns - 1) / num_columns;

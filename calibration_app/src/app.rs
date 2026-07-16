@@ -5,7 +5,7 @@ use std::{
 
 use calib_targets::{
     aruco::builtins::DICT_6X6_100,
-    charuco::{CharucoBoard, CharucoDetectionResult},
+    charuco::{CharucoBoard, CharucoDetectionResult, MarkerLayout::OpenCvCharuco},
     printable::{CharucoTargetSpec, PageSpec, PrintableTargetDocument, render_target_bundle},
 };
 use eframe::{
@@ -66,15 +66,9 @@ pub(crate) enum CalibrationStep {
 
 impl Default for CalibrationApp {
     fn default() -> Self {
-        let charuco_target_spec = CharucoTargetSpec {
-            rows: 11,
-            cols: 8,
-            square_size_mm: 20.0,
-            marker_size_rel: 0.55,
-            dictionary: DICT_6X6_100,
-            marker_layout: calib_targets::charuco::MarkerLayout::OpenCvCharuco,
-            border_bits: 3,
-        };
+        let charuco_target_spec = CharucoTargetSpec::new(11, 8, 20.0, 0.55, DICT_6X6_100)
+            .with_marker_layout(OpenCvCharuco)
+            .with_border_bits(3);
         let charuco_board = CharucoBoard::new(charuco_target_spec.to_board_spec())
             .expect("Неправильные даненые по умолчанию для Charuco");
 

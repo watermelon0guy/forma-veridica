@@ -484,7 +484,7 @@ pub fn track_points_optical_flow_all(
     max_iterations: usize,
     pyramid_levels: usize,
 ) -> Vec<Vec<Point2<f64>>> {
-    use optical_flow_lk::{build_pyramid, calc_optical_flow};
+    use optical_flow_lk::{build_pyramid, calc_optical_flow_ex};
 
     let num_cameras = prev_frames.len();
     let mut all_new_points: Vec<Vec<Point2<f64>>> = Vec::with_capacity(num_cameras);
@@ -499,18 +499,20 @@ pub fn track_points_optical_flow_all(
             .map(|p| (p.x as f32, p.y as f32))
             .collect();
 
-        let new_f32 = calc_optical_flow(
+        let results = calc_optical_flow_ex(
             &prev_pyramid,
             &curr_pyramid,
             &prev_f32,
+            None,
             window_size,
             max_iterations,
+            0.001,
         );
 
-        // (f32, f32) -> Point2<f64>
-        let new_points: Vec<Point2<f64>> = new_f32
+        // TrackResult -> Point2<f64>
+        let new_points: Vec<Point2<f64>> = results
             .into_iter()
-            .map(|(x, y)| Point2::new(x as f64, y as f64))
+            .map(|r| Point2::new(r.pos.0 as f64, r.pos.1 as f64))
             .collect();
 
         let (w, h) = curr_frames[cam_i].dimensions();

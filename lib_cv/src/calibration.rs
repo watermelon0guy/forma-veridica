@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use calib_targets::{
-    GridCoords,
+    Coord,
     aruco::MarkerDetection,
     charuco::{CharucoBoard, CharucoCorner, CharucoDetectionResult, CharucoParams},
     core::GridAlignment,
@@ -79,13 +79,12 @@ fn convert_to_charuco_result(
     corners: &[(usize, Point2<f32>)],
     markers: Vec<MarkerDetection>,
 ) -> CharucoDetectionResult {
-    // Строим обратный маппинг corner_id -> (i, j) для GridCoords
-    let mut id_to_grid: std::collections::HashMap<u32, GridCoords> =
-        std::collections::HashMap::new();
+    // Строим обратный маппинг corner_id -> (u, v) для Coord
+    let mut id_to_grid: std::collections::HashMap<u32, Coord> = std::collections::HashMap::new();
     for i in 0..board.expected_inner_rows() as i32 {
         for j in 0..board.expected_inner_cols() as i32 {
             if let Some(cid) = board.charuco_corner_id_from_board_corner(i, j) {
-                id_to_grid.insert(cid, GridCoords { i, j });
+                id_to_grid.insert(cid, Coord::new(i, j));
             }
         }
     }
@@ -343,8 +342,25 @@ pub fn calibrate_multiple_with_inrinsics(
     }
 
     let rig_dataset = RigExtrinsicsInput::new(rigs, num_cameras)?;
-    let k_vec: Vec<FxFyCxCySkew<f64>> = intrinsics.iter().map(|r| r.params.camera.k).collect();
-    let d_vec: Vec<BrownConrady5<f64>> = intrinsics.iter().map(|r| r.params.camera.dist).collect();
+    let k_vec: Vec<FxFyCxCySkew<f64>> = intrinsics
+        .iter()
+        .map(|r| {
+            let vision_calibration::core::IntrinsicsParams::FxFyCxCySkew { params } =
+                r.params.camera.intrinsics.clone();
+            params
+        })
+        .collect();
+    let d_vec: Vec<BrownConrady5<f64>> = intrinsics
+        .iter()
+        .map(|r| {
+            let vision_calibration::core::DistortionParams::BrownConrady5 { params } =
+                r.params.camera.distortion.clone()
+            else {
+                panic!("Expected BrownConrady5 distortion");
+            };
+            params
+        })
+        .collect();
 
     let mut session = CalibrationSession::<RigExtrinsicsProblem>::new();
     session.set_input(rig_dataset)?;

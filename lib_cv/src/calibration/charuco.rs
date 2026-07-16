@@ -1,5 +1,5 @@
 use calib_targets::{
-    GridCoords,
+    Coord,
     aruco::{MarkerCell, MarkerDetection, Matcher, ScanDecodeConfig, scan_decode_markers_in_cells},
     charuco::CharucoBoard,
     core::{GrayImageView, Homography, homography_from_4pt},
@@ -242,6 +242,10 @@ pub fn detect_aruco_markers(
             .all(|c| c.x >= BORDER && c.y >= BORDER && c.x < iw - BORDER && c.y < ih - BORDER)
     });
 
+    if quads.is_empty() {
+        return Vec::new();
+    }
+
     // Уточнение углов: сначала через линии контура, потом cornerSubPix
     for quad in &mut quads {
         // 1. Уточнение через аппроксимацию линий (использует весь контур)
@@ -256,7 +260,7 @@ pub fn detect_aruco_markers(
     let cells: Vec<MarkerCell> = quads
         .iter()
         .map(|q| MarkerCell {
-            gc: GridCoords { i: 0, j: 0 },
+            gc: Coord::new(0, 0),
             corners_img: q.corners,
         })
         .collect();
@@ -307,14 +311,13 @@ pub fn detect_aruco_markers(
         return Vec::new();
     }
 
-    let cfg = ScanDecodeConfig {
-        border_bits: 1,
-        inset_frac: 0.04,
-        marker_size_rel: 1.0,
-        min_border_score: 0.75,
-        dedup_by_id: true,
-        multi_threshold: true,
-    };
+    let cfg = ScanDecodeConfig::default()
+        .with_border_bits(1)
+        .with_inset_frac(0.04)
+        .with_marker_size_rel(1.0)
+        .with_min_border_score(0.75)
+        .with_dedup_by_id(true)
+        .with_multi_threshold(true);
 
     let markers: Vec<_> = filtered_cells
         .par_chunks(32)

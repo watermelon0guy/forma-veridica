@@ -15,7 +15,7 @@ pub fn charuco_board_screen(app: &mut CalibrationApp, ui: &mut Ui) {
 
     let page_margin_mm = 10.0;
 
-    Panel::left("parameters").show_inside(ui, |ui| {
+    Panel::left("parameters").show(ui, |ui| {
         ui.add(
             Slider::new(
                 &mut app.charuco_target_spec.cols,
@@ -87,18 +87,17 @@ pub fn charuco_board_screen(app: &mut CalibrationApp, ui: &mut Ui) {
                 .set_file_name("charuco_board.png")
                 .save_file()
             {
-                let save_page_spec = PageSpec {
-                    size: PageSize::Custom {
-                        width_mm: app.charuco_target_spec.square_size_mm
-                            * app.charuco_target_spec.cols as f64
-                            + page_margin_mm * 2.0,
-                        height_mm: app.charuco_target_spec.square_size_mm
-                            * app.charuco_target_spec.rows as f64
-                            + page_margin_mm * 2.0,
-                    },
-                    orientation: PageOrientation::Portrait,
-                    margin_mm: page_margin_mm,
+                let mut save_page_spec = PageSpec::default();
+                save_page_spec.size = PageSize::Custom {
+                    width_mm: app.charuco_target_spec.square_size_mm
+                        * app.charuco_target_spec.cols as f64
+                        + page_margin_mm * 2.0,
+                    height_mm: app.charuco_target_spec.square_size_mm
+                        * app.charuco_target_spec.rows as f64
+                        + page_margin_mm * 2.0,
                 };
+                save_page_spec.orientation = PageOrientation::Portrait;
+                save_page_spec.margin_mm = page_margin_mm;
                 match charuco_target_spec_to_dynamic_image(
                     &app.charuco_target_spec,
                     300,
@@ -117,18 +116,17 @@ pub fn charuco_board_screen(app: &mut CalibrationApp, ui: &mut Ui) {
         }
     });
 
-    let page_spec = PageSpec {
-        size: PageSize::Custom {
-            width_mm: app.charuco_target_spec.square_size_mm * app.charuco_target_spec.cols as f64
-                + page_margin_mm * 2.0,
-            height_mm: app.charuco_target_spec.square_size_mm * app.charuco_target_spec.rows as f64
-                + page_margin_mm * 2.0,
-        },
-        orientation: PageOrientation::Portrait,
-        margin_mm: page_margin_mm,
+    let mut page_spec = PageSpec::default();
+    page_spec.size = PageSize::Custom {
+        width_mm: app.charuco_target_spec.square_size_mm * app.charuco_target_spec.cols as f64
+            + page_margin_mm * 2.0,
+        height_mm: app.charuco_target_spec.square_size_mm * app.charuco_target_spec.rows as f64
+            + page_margin_mm * 2.0,
     };
+    page_spec.orientation = PageOrientation::Portrait;
+    page_spec.margin_mm = page_margin_mm;
 
-    eframe::egui::CentralPanel::default().show_inside(ui, |ui| {
+    eframe::egui::CentralPanel::default().show(ui, |ui| {
         if let Ok(image) =
             charuco_target_spec_to_dynamic_image(&app.charuco_target_spec, 60, page_spec)
         {

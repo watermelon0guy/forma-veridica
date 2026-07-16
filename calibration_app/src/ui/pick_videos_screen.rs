@@ -5,7 +5,7 @@ use eframe::egui::{Align, Button, Layout, RichText, Ui};
 use crate::app::{CalibrationApp, CalibrationStep};
 
 pub fn pick_videos_screen(app: &mut CalibrationApp, ui: &mut Ui) {
-    eframe::egui::CentralPanel::default().show_inside(ui, |ui| {
+    eframe::egui::CentralPanel::default().show(ui, |ui| {
         ui.vertical_centered(|ui| {
             if app.num_cameras() == 0 {
                 ui.label("Выберите видео калибровок, чтобы начать");

@@ -5,7 +5,7 @@ use crate::app::CalibrationApp;
 use std::sync::mpsc::TryRecvError;
 
 pub fn calibration_screen(app: &mut CalibrationApp, ui: &mut Ui) {
-    CentralPanel::default().show_inside(ui, |ui| {
+    CentralPanel::default().show(ui, |ui| {
         if app.calibration_thread.is_none()
             && app.calibration_result_rx.is_none()
             && app.calibration_result.is_none()
