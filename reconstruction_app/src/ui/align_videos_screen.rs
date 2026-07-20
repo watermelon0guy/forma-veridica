@@ -22,7 +22,7 @@ pub fn align_video_screen(app: &mut ReconstructionApp, ui: &mut Ui) {
         set_color_image_to_texture_handle(vp.dynamic_image(), &mut app.video_texture_handles[i]);
     }
 
-    CentralPanel::default().show_inside(ui, |ui| {
+    CentralPanel::default().show(ui, |ui| {
         Frame::NONE.show(ui, |ui| {
             let num_columns = ((total as f32).sqrt().ceil() as usize).min(total);
             let num_rows = (total + num_columns - 1) / num_columns;

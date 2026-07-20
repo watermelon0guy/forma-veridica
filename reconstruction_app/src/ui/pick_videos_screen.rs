@@ -5,7 +5,7 @@ use eframe::egui::{Align, Button, CentralPanel, Color32, Layout, RichText, Ui};
 use crate::app::{PipelineState, ReconstructionApp};
 
 pub fn pick_videos_screen(app: &mut ReconstructionApp, ui: &mut Ui) {
-    CentralPanel::default().show_inside(ui, |ui| {
+    CentralPanel::default().show(ui, |ui| {
         ui.vertical_centered(|ui| {
             for vid in &app.video_paths.clone() {
                 render_video_path(app, ui, vid);

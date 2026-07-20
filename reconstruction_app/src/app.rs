@@ -4,12 +4,12 @@ use lib_cv::{
     reconstruction::{
         PointCloud, add_color_to_point_cloud, filter_matches_by_epipolar,
         filter_point_cloud_by_confidence, gather_points_2d_from_matches,
-        match_first_camera_features_to_all, min_visible_match_set, save_point_cloud,
+        match_with_epipolar_constraint, min_visible_match_set, save_point_cloud,
         track_points_optical_flow_all, triangulate_points_multiple, undistort_points,
     },
     video::{VideoPlayer, dynamic_image_to_color_image},
 };
-use log::{debug, info};
+use log::info;
 use std::sync::mpsc;
 use vision_calibration::rig_extrinsics::RigExtrinsicsExport;
 
@@ -148,47 +148,20 @@ fn run_pipeline_in_thread(
     // --- Первый кадр: SIFT + matching ---
     let first_frames: Vec<_> = players.iter().map(|p| p.dynamic_image().clone()).collect();
 
-    let (all_matches, all_keypoints, _descriptors) =
-        match_first_camera_features_to_all(&first_frames);
+    let (all_matches, all_keypoints) = match_with_epipolar_constraint(&first_frames, &calib, 15.0);
 
     let filtered_matches = min_visible_match_set(&all_matches, all_keypoints[0].len());
 
     let points_2d_raw = gather_points_2d_from_matches(&filtered_matches, &all_keypoints);
 
-    // --- Undistortion (до эпиполярной фильтрации!) ---
-    // Фундаментальная матрица работает только для неискажённых точек
-    let mut undistorted_raw: Vec<Vec<_>> = Vec::with_capacity(num_cameras);
+    // Matching already did epipolar filtering internally,
+    // go straight to undistort + triangulate
+    let mut undistorted: Vec<Vec<_>> = Vec::with_capacity(num_cameras);
     for cam_i in 0..num_cameras {
-        if cam_i == 0 {
-            for pt_i in 0..points_2d_raw[cam_i].len().min(3) {
-                debug!(
-                    "Точка {pt_i} камера 0: pixel=({:.1},{:.1})",
-                    points_2d_raw[cam_i][pt_i].x, points_2d_raw[cam_i][pt_i].y
-                );
-            }
-        }
         let undist = undistort_points(&points_2d_raw[cam_i], &calib.cameras[cam_i]);
-        if cam_i == 0 {
-            for pt_i in 0..undist.len().min(3) {
-                debug!(
-                    "  после undistort: ({:.1},{:.1})",
-                    undist[pt_i].x, undist[pt_i].y
-                );
-            }
-        }
-        undistorted_raw.push(undist);
+        undistorted.push(undist);
     }
 
-    // --- Эпиполярная фильтрация на неискажённых точках ---
-    let (undistorted, good_indices) = filter_matches_by_epipolar(&undistorted_raw, &calib, 10.0);
-
-    // Фильтруем искажённые координаты теми же индексами — для lookup цвета
-    let points_2d_distorted: Vec<Vec<_>> = points_2d_raw
-        .iter()
-        .map(|cam| good_indices.iter().map(|&i| cam[i]).collect())
-        .collect();
-
-    // --- Триангуляция ---
     let points_3d = triangulate_points_multiple(&undistorted, &calib).map_err(|e| e.to_string())?;
 
     let current_frame: usize = 0;
@@ -197,7 +170,7 @@ fn run_pipeline_in_thread(
         timestamp: current_frame,
     };
 
-    add_color_to_point_cloud(&mut cloud, &points_2d_distorted[0], &first_frames[0]);
+    add_color_to_point_cloud(&mut cloud, &points_2d_raw[0], &first_frames[0]);
 
     let before = cloud.points.len();
     filter_point_cloud_by_confidence(&mut cloud, 0.05);
@@ -214,7 +187,7 @@ fn run_pipeline_in_thread(
     // --- Готовимся к optical flow ---
     let mut prev_frames = first_frames;
     // Для optical flow нужны ИСКАЖЁННЫЕ координаты (трекинг по сырым кадрам)
-    let mut prev_points = points_2d_distorted;
+    let mut prev_points = points_2d_raw;
 
     // --- Цикл по оставшимся кадрам ---
     let total_frames = players[0].total_frames();
@@ -249,7 +222,7 @@ fn run_pipeline_in_thread(
 
         // Эпиполярная фильтрация на неискажённых точках
         let (new_undistorted, good_indices) =
-            filter_matches_by_epipolar(&new_undistorted_raw, &calib, 10.0);
+            filter_matches_by_epipolar(&new_undistorted_raw, &calib, 15.0);
 
         // Фильтруем искажённые координаты для lookup цвета и для следующей итерации optical flow
         let new_points: Vec<Vec<_>> = new_points_raw

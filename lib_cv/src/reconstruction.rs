@@ -320,6 +320,21 @@ fn to_fixed_array(v: &[f32]) -> [f32; SIFT_DIM] {
     arr
 }
 
+/// RootSIFT: L1-нормализация + поэлементный sqrt.
+/// Преобразует Евклидово расстояние в расстояние Хеллингера,
+/// что значительно улучшает качество сопоставления на повторяющихся текстурах.
+fn root_sift_normalize(descriptors: &mut [Vec<f32>]) {
+    for desc in descriptors.iter_mut() {
+        let l1: f32 = desc.iter().map(|v| v.abs()).sum();
+        if l1 > 1e-10 {
+            for v in desc.iter_mut() {
+                *v /= l1;
+                *v = v.sqrt();
+            }
+        }
+    }
+}
+
 /// Детектирует SIFT-признаки на всех камерах и сопоставляет камеру 0 с каждой
 /// из остальных через KNN-поиск (k-d дерево) + Lowe's ratio test + взаимная проверка.
 pub fn match_first_camera_features_to_all(
@@ -354,6 +369,11 @@ pub fn match_first_camera_features_to_all(
         info!("Камера {i}: найдено {} ключевых точек", kp.len());
         all_keypoints.push(kp);
         all_descriptors.push(desc);
+    }
+
+    // RootSIFT нормализация
+    for desc in all_descriptors.iter_mut() {
+        root_sift_normalize(desc);
     }
 
     // 2. Строим ImmutableKdTree по дескрипторам камеры 0
@@ -614,4 +634,113 @@ pub fn track_points_optical_flow_all(
     }
 
     all_new_points
+}
+
+/// Epipolar-constrained SIFT matching: KNN by descriptor,
+/// then filter by epipolar distance, then Lowe ratio test.
+pub fn match_with_epipolar_constraint(
+    images: &[image::DynamicImage],
+    export: &RigExtrinsicsExport,
+    epipolar_threshold_px: f64,
+) -> (Vec<Vec<FeatureMatch>>, Vec<Vec<KeyPoint>>) {
+    let num_cameras = images.len();
+    if num_cameras < 2 {
+        warn!("Need at least 2 images for matching");
+        return (vec![], vec![]);
+    }
+
+    let sift = Sift::new(1.6, 6, 3, 0.5, 0.01, 15.0);
+
+    // 1. SIFT + RootSIFT
+    let mut all_keypoints: Vec<Vec<KeyPoint>> = Vec::with_capacity(num_cameras);
+    let mut all_descriptors: Vec<Vec<Vec<f32>>> = Vec::with_capacity(num_cameras);
+
+    for (i, img) in images.iter().enumerate() {
+        let (kp, desc) = sift.detect_and_compute(img);
+        info!("Camera {i}: {} keypoints", kp.len());
+        all_keypoints.push(kp);
+        all_descriptors.push(desc);
+    }
+
+    for desc in all_descriptors.iter_mut() {
+        root_sift_normalize(desc);
+    }
+
+    // 2. Undistort all keypoints
+    let undistorted_kps: Vec<Vec<Point2<f64>>> = all_keypoints
+        .iter()
+        .enumerate()
+        .map(|(cam_i, kps)| {
+            let pixels: Vec<Point2<f64>> = kps
+                .iter()
+                .map(|kp| Point2::new(kp.x as f64, kp.y as f64))
+                .collect();
+            undistort_points(&pixels, &export.cameras[cam_i])
+        })
+        .collect();
+
+    // 3. Fundamental matrix
+    let f = compute_fundamental_matrix(export);
+
+    // 4. K-d tree on camera 0 descriptors
+    let ref_arrays: Vec<[f32; SIFT_DIM]> = all_descriptors[0]
+        .iter()
+        .map(|d| to_fixed_array(d))
+        .collect();
+    let ref_tree: ImmutableKdTree<f32, usize, SIFT_DIM, 32> =
+        ImmutableKdTree::new_from_slice(&ref_arrays);
+
+    let knn_k: usize = 10;
+    let ratio_threshold: f32 = 0.75;
+
+    let mut all_matches: Vec<Vec<FeatureMatch>> = Vec::with_capacity(num_cameras - 1);
+
+    for cam_i in 1..num_cameras {
+        let cam_descriptors = &all_descriptors[cam_i];
+        let mut cam_matches: Vec<FeatureMatch> = Vec::new();
+
+        for (cam_idx, desc) in cam_descriptors.iter().enumerate() {
+            let neighbors = ref_tree
+                .nearest_n::<SquaredEuclidean>(&to_fixed_array(desc), NonZero::new(knn_k).unwrap());
+
+            // Filter by epipolar distance
+            let p1 = undistorted_kps[cam_i][cam_idx];
+            let mut candidates: Vec<(usize, f32)> = Vec::new();
+            for n in &neighbors {
+                let ref_idx = n.item as usize;
+                let p0 = undistorted_kps[0][ref_idx];
+                let d = epipolar_distance(&f, &p0, &p1);
+                if d < epipolar_threshold_px {
+                    candidates.push((ref_idx, n.distance));
+                }
+            }
+
+            candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+            if candidates.len() >= 2 {
+                if candidates[0].1 < ratio_threshold * candidates[1].1 {
+                    cam_matches.push(FeatureMatch {
+                        ref_idx: candidates[0].0,
+                        cam_idx,
+                        distance: candidates[0].1,
+                    });
+                }
+            } else if candidates.len() == 1 {
+                cam_matches.push(FeatureMatch {
+                    ref_idx: candidates[0].0,
+                    cam_idx,
+                    distance: candidates[0].1,
+                });
+            }
+        }
+
+        info!(
+            "Camera 0 to camera {cam_i}: {} epipolar matches (out of {})",
+            cam_matches.len(),
+            cam_descriptors.len()
+        );
+        all_matches.push(cam_matches);
+    }
+
+    (all_matches, all_keypoints)
 }

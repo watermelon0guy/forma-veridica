@@ -5,7 +5,7 @@ use eframe::egui::{CentralPanel, Ui};
 use crate::app::ReconstructionApp;
 
 pub fn process_screen(app: &mut ReconstructionApp, ui: &mut Ui) {
-    CentralPanel::default().show_inside(ui, |ui| {
+    CentralPanel::default().show(ui, |ui| {
         // Запускаем поток, если ещё не запущен
         if app.pipeline_thread.is_none()
             && app.pipeline_result_rx.is_none()

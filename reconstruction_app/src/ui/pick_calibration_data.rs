@@ -23,7 +23,7 @@ fn pick_camera_parameters_file(
 }
 
 pub fn pick_calibration_screen(app: &mut ReconstructionApp, ui: &mut Ui) {
-    CentralPanel::default().show_inside(ui, |ui| {
+    CentralPanel::default().show(ui, |ui| {
         ui.vertical_centered(|ui| {
             ui.heading("Параметры камер");
 
