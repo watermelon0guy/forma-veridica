@@ -79,12 +79,13 @@ fn convert_to_charuco_result(
     corners: &[(usize, Point2<f32>)],
     markers: Vec<MarkerDetection>,
 ) -> CharucoDetectionResult {
-    // Строим обратный маппинг corner_id -> (u, v) для Coord
+    // Строим обратный маппинг corner_id -> Coord
+    // charuco_corner_id_from_board_corner(col, row): 1-based, col ∈ 1..cols, row ∈ 1..rows
     let mut id_to_grid: std::collections::HashMap<u32, Coord> = std::collections::HashMap::new();
-    for i in 0..board.expected_inner_rows() as i32 {
-        for j in 0..board.expected_inner_cols() as i32 {
-            if let Some(cid) = board.charuco_corner_id_from_board_corner(i, j) {
-                id_to_grid.insert(cid, Coord::new(i, j));
+    for row in 1..=board.expected_inner_rows() as i32 {
+        for col in 1..=board.expected_inner_cols() as i32 {
+            if let Some(cid) = board.charuco_corner_id_from_board_corner(col, row) {
+                id_to_grid.insert(cid, Coord::new(col, row));
             }
         }
     }
@@ -378,10 +379,79 @@ pub fn calibrate_multiple_with_inrinsics(
     Ok(result)
 }
 
+/// Сохраняет данные, необходимые для реконструкции, без огромного списка
+/// остатков каждой отдельной точки. Полная диагностика может содержать больше
+/// 65 536 элементов, что превышает лимит последовательности `serde_yml`.
+pub fn save_calibration_to_yaml(
+    path: &PathBuf,
+    calibration: &RigExtrinsicsExport,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut compact = calibration.clone();
+    compact.per_feature_residuals = Default::default();
+    compact.image_manifest = None;
+    let yaml = serde_yml::to_string(&compact)?;
+    std::fs::write(path, yaml)?;
+    Ok(())
+}
+
 pub fn load_calibration_from_yaml(
     path: &PathBuf,
 ) -> Result<RigExtrinsicsExport, Box<dyn std::error::Error>> {
-    let yaml_str = std::fs::read_to_string(path)?;
-    let export: RigExtrinsicsExport = serde_yml::from_str(&yaml_str)?;
+    let yaml = std::fs::read_to_string(path)?;
+    // Старые файлы могли быть сохранены с десятками тысяч подробных
+    // per-feature residuals. Они не нужны реконструкции и не помещаются в
+    // жёсткий лимит YAML-парсера, поэтому удаляем блок до десериализации.
+    let compact_yaml = remove_top_level_yaml_field(&yaml, "per_feature_residuals");
+    let export: RigExtrinsicsExport = serde_yml::from_str(&compact_yaml)?;
     Ok(export)
+}
+
+fn remove_top_level_yaml_field(yaml: &str, field: &str) -> String {
+    let key = format!("{field}:");
+    let mut output = String::with_capacity(yaml.len());
+    let mut skipping = false;
+
+    for line in yaml.split_inclusive('\n') {
+        let content = line.trim_end_matches(['\r', '\n']);
+        let is_top_level = !content.starts_with([' ', '\t']);
+
+        if !skipping && is_top_level && content.trim_end() == key {
+            skipping = true;
+            continue;
+        }
+
+        if skipping {
+            if content.is_empty() || !is_top_level {
+                continue;
+            }
+            skipping = false;
+        }
+
+        output.push_str(line);
+    }
+
+    output
+}
+
+#[cfg(test)]
+mod yaml_tests {
+    use super::remove_top_level_yaml_field;
+
+    #[test]
+    fn removes_only_requested_top_level_block() {
+        let yaml = "kind: rig_extrinsics\nper_feature_residuals:\n  target:\n    - error_px: 1.0\n  laser: []\nimage_manifest: null\n";
+        assert_eq!(
+            remove_top_level_yaml_field(yaml, "per_feature_residuals"),
+            "kind: rig_extrinsics\nimage_manifest: null\n"
+        );
+    }
+
+    #[test]
+    fn preserves_nested_fields_with_the_same_name() {
+        let yaml = "outer:\n  per_feature_residuals:\n    target: []\nnext: 1\n";
+        assert_eq!(
+            remove_top_level_yaml_field(yaml, "per_feature_residuals"),
+            yaml
+        );
+    }
 }

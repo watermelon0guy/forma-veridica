@@ -1,6 +1,7 @@
 use eframe::egui::{CentralPanel, ProgressBar, RichText, Ui};
 
 use crate::app::CalibrationApp;
+use lib_cv::calibration::save_calibration_to_yaml;
 
 use std::sync::mpsc::TryRecvError;
 
@@ -63,8 +64,9 @@ pub fn calibration_screen(app: &mut CalibrationApp, ui: &mut Ui) {
                         .add_filter("yaml", &["yml", "yaml"])
                         .save_file()
                     {
-                        if let Ok(yaml) = serde_yml::to_string(result) {
-                            let _ = std::fs::write(&path.with_extension("yaml"), yaml);
+                        let path = path.with_extension("yaml");
+                        if let Err(error) = save_calibration_to_yaml(&path, result) {
+                            log::error!("Не удалось сохранить калибровку: {error}");
                         }
                     }
                 }

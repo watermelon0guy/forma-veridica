@@ -21,6 +21,32 @@ pub struct QuadWithContour {
     pub contour: Vec<Point2<i32>>,
 }
 
+/// Возвращает все внутренние ChArUco-углы, прилегающие к клетке маркера.
+///
+/// `CharucoBoard::marker_surrounding_charuco_corners` подходит только для
+/// маркеров, окружённых четырьмя внутренними пересечениями, и возвращает
+/// `None` для маркеров на границе. Для интерполяции нам нужны и граничные
+/// маркеры, поскольку у них всё равно есть один или два внутренних угла.
+fn marker_adjacent_charuco_corner_ids(board: &CharucoBoard, marker_id: i32) -> Vec<usize> {
+    let Some((col, row)) = board.marker_cell(marker_id) else {
+        return Vec::new();
+    };
+
+    [
+        (col as i32, row as i32),
+        (col as i32 + 1, row as i32),
+        (col as i32 + 1, row as i32 + 1),
+        (col as i32, row as i32 + 1),
+    ]
+    .into_iter()
+    .filter_map(|(col, row)| {
+        board
+            .charuco_corner_id_from_board_corner(col, row)
+            .map(|id| id as usize)
+    })
+    .collect()
+}
+
 // After find_marker_quads: remove quads with nearly coincident centers.
 // Threshold is proportional to the smaller perimeter (0.125×), matching
 // OpenCV's minMarkerDistanceRate logic.
@@ -413,13 +439,11 @@ pub fn refine_charuco_corners(
             Some(c) => c,
             None => continue,
         };
-        if let Some(surrounding) = board.marker_surrounding_charuco_corners(marker.id as i32) {
-            for c_id in surrounding {
-                corner_to_marker_corners
-                    .entry(c_id)
-                    .or_default()
-                    .push(marker_corners);
-            }
+        for c_id in marker_adjacent_charuco_corner_ids(board, marker.id as i32) {
+            corner_to_marker_corners
+                .entry(c_id)
+                .or_default()
+                .push(marker_corners);
         }
     }
 
@@ -493,10 +517,8 @@ pub fn filter_bad_charuco_corners(
             Some(c) => c,
             None => continue,
         };
-        if let Some(surrounding) = board.marker_surrounding_charuco_corners(marker.id as i32) {
-            for c_id in surrounding {
-                corner_to_markers.entry(c_id).or_default().push((m_idx, mc));
-            }
+        for c_id in marker_adjacent_charuco_corner_ids(board, marker.id as i32) {
+            corner_to_markers.entry(c_id).or_default().push((m_idx, mc));
         }
     }
 
@@ -590,19 +612,17 @@ pub fn interpolate_charuco_corners(
     // Store (marker_id, homography) pairs so we can sort by marker_id
     let mut corner_to_homographies: HashMap<usize, Vec<(u32, &Homography)>> = HashMap::new();
     for (marker_id, h) in transforms {
-        if let Some(ids) = board.marker_surrounding_charuco_corners(*marker_id as i32) {
-            for c_id in ids {
-                corner_to_homographies
-                    .entry(c_id)
-                    .or_default()
-                    .push((*marker_id, h));
-            }
+        for c_id in marker_adjacent_charuco_corner_ids(board, *marker_id as i32) {
+            corner_to_homographies
+                .entry(c_id)
+                .or_default()
+                .push((*marker_id, h));
         }
     }
 
-    for i in 0..board.expected_inner_rows() as i32 {
-        for j in 0..board.expected_inner_cols() as i32 {
-            let corner_id = match board.charuco_corner_id_from_board_corner(i, j) {
+    for row in 1..=board.expected_inner_rows() as i32 {
+        for col in 1..=board.expected_inner_cols() as i32 {
+            let corner_id = match board.charuco_corner_id_from_board_corner(col, row) {
                 Some(id) => id as usize,
                 None => continue,
             };

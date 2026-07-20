@@ -1,7 +1,7 @@
 use kiddo::SquaredEuclidean;
 use kiddo::immutable::float::kdtree::ImmutableKdTree;
 use log::{debug, error, info, warn};
-use nalgebra::{DMatrix, Matrix3x4, Point2, Point3, SVD};
+use nalgebra::{DMatrix, Matrix3, Matrix3x4, Point2, Point3, SVD, Vector3};
 use sift::{KeyPoint, Sift};
 use std::num::NonZero;
 use vision_calibration::core::{Iso3, PinholeCamera};
@@ -55,6 +55,90 @@ pub fn build_projection_matrices(export: &RigExtrinsicsExport) -> Vec<Matrix3x4<
     }
 
     projections
+}
+
+/// Вычисляет фундаментальную матрицу F из калибровки двух камер.
+/// F = K1^{-T} * [t]_x * R * K0^{-1}
+pub fn compute_fundamental_matrix(export: &RigExtrinsicsExport) -> Matrix3<f64> {
+    assert!(
+        export.cameras.len() == 2,
+        "Фундаментальная матрица определена только для 2 камер"
+    );
+    let k0 = export.cameras[0].k.k_matrix();
+    let k1 = export.cameras[1].k.k_matrix();
+
+    // cam_se3_rig[i] = T_Ci_R (rig -> camera_i)
+    // T_C1_C0 = T_C1_R * T_R_C0 = cam_se3_rig[1] * cam_se3_rig[0]^{-1}
+    let t_c1_c0 = &export.cam_se3_rig[1] * export.cam_se3_rig[0].inverse();
+
+    let r = t_c1_c0.rotation.to_rotation_matrix().into_inner();
+    let t = t_c1_c0.translation.vector;
+
+    // Матрица векторного произведения [t]_x
+    let t_x = Matrix3::new(0.0, -t.z, t.y, t.z, 0.0, -t.x, -t.y, t.x, 0.0);
+
+    let k0_inv = k0.try_inverse().expect("K0 не обратима");
+    let k1_inv_t = k1.try_inverse().expect("K1 не обратима").transpose();
+
+    k1_inv_t * t_x * r * k0_inv
+}
+
+/// Расстояние от точки p1 до эпиполярной линии, соответствующей точке p0.
+pub fn epipolar_distance(f: &Matrix3<f64>, p0: &Point2<f64>, p1: &Point2<f64>) -> f64 {
+    let x0 = Vector3::new(p0.x, p0.y, 1.0);
+    let x1 = Vector3::new(p1.x, p1.y, 1.0);
+    let l = f * x0;
+    let numerator = x1.dot(&l).abs();
+    let denominator = (l[0] * l[0] + l[1] * l[1]).sqrt();
+    numerator / denominator
+}
+
+/// Фильтрует соответствия по эпиполярному ограничению.
+/// Оставляет только те пары, где точка камеры 1 лежит вблизи эпиполярной линии.
+/// ВАЖНО: точки должны быть неискажёнными (undistorted) —
+/// фундаментальная матрица строится из pinhole-модели без учёта дисторсии.
+///
+/// Возвращает (отфильтрованные_точки, индексы_прошедших).
+pub fn filter_matches_by_epipolar(
+    points_2d: &[Vec<Point2<f64>>],
+    export: &RigExtrinsicsExport,
+    threshold_px: f64,
+) -> (Vec<Vec<Point2<f64>>>, Vec<usize>) {
+    assert_eq!(
+        points_2d.len(),
+        2,
+        "Эпиполярная фильтрация поддерживает ровно 2 камеры"
+    );
+    assert_eq!(
+        points_2d[0].len(),
+        points_2d[1].len(),
+        "Количество точек должно совпадать для обеих камер"
+    );
+
+    let f = compute_fundamental_matrix(export);
+    let num_points = points_2d[0].len();
+
+    let mut good_indices: Vec<usize> = Vec::new();
+    for i in 0..num_points {
+        let d = epipolar_distance(&f, &points_2d[0][i], &points_2d[1][i]);
+        if d < threshold_px {
+            good_indices.push(i);
+        }
+    }
+
+    info!(
+        "Эпиполярная фильтрация: {} из {} соответствий прошли порог {:.1} px",
+        good_indices.len(),
+        num_points,
+        threshold_px
+    );
+
+    let filtered = points_2d
+        .iter()
+        .map(|cam_points| good_indices.iter().map(|&i| cam_points[i]).collect())
+        .collect();
+
+    (filtered, good_indices)
 }
 
 /// Убирает дисторсию: пиксельные координаты → неискажённые пиксельные.

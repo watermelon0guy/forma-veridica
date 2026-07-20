@@ -59,11 +59,14 @@ impl VideoPlayer {
     }
 
     pub fn seek_to_time(&mut self, seconds: f64) -> Result<(), Box<dyn std::error::Error>> {
-        let duration = self.duration;
-        if seconds < duration.as_secs_f64() {
-            self.decoder.seek((seconds * 1000.0) as i64)?;
-            self.update_frame()?;
+        if !(0.0..self.duration.as_secs_f64()).contains(&seconds) {
+            return Err(format!("Время {seconds} находится за пределами видео").into());
         }
+
+        self.decoder.seek((seconds * 1000.0) as i64)?;
+        self.update_frame()?;
+        self.current_time_in_seconds = seconds;
+        self.update_current_frame_from_time_in_seconds(seconds);
         Ok(())
     }
 
