@@ -1,12 +1,12 @@
 use eframe::egui::{CentralPanel, Frame, Grid, ScrollArea, Ui, vec2};
 use lib_cv::{calibration::get_charuco_marker_first, utils::draw_charuco_detection};
+use lib_ui::utils::set_color_image_to_texture_handle;
 use log::warn;
 
 use crate::{
     app::{CalibrationApp, CalibrationStep, FrameWithCharucoData},
     ui::{PADDING, components::render_video_card_with_buttons},
 };
-use lib_cv::video::set_color_image_to_texture_handle;
 
 pub fn align_video_screen(app: &mut CalibrationApp, ui: &mut Ui) {
     if let Err(e) = app.init_videos(ui.ctx()) {

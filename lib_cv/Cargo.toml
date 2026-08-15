@@ -16,6 +16,5 @@ nalgebra = { workspace = true }
 ndarray = { workspace = true }
 imageproc = { workspace = true }
 rayon = { workspace = true }
-eframe = { workspace = true }
 optical-flow-lk = { workspace = true }
 serde_yml = { workspace = true }

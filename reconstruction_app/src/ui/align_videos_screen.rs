@@ -1,5 +1,6 @@
 use eframe::egui::{Align, CentralPanel, Frame, Grid, Image, Layout, ScrollArea, Ui, vec2};
-use lib_cv::video::{VideoPlayer, set_color_image_to_texture_handle};
+use lib_cv::video::VideoPlayer;
+use lib_ui::utils::set_color_image_to_texture_handle;
 use log::error;
 
 use crate::app::{PipelineState, ReconstructionApp};

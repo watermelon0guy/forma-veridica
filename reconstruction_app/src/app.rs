@@ -7,8 +7,9 @@ use lib_cv::{
         match_with_epipolar_constraint, min_visible_match_set, save_point_cloud,
         track_points_optical_flow_all, triangulate_points_multiple, undistort_points,
     },
-    video::{VideoPlayer, dynamic_image_to_color_image},
+    video::VideoPlayer,
 };
+use lib_ui::utils::dynamic_image_to_color_image;
 use log::info;
 use std::sync::mpsc;
 use vision_calibration::rig_extrinsics::RigExtrinsicsExport;

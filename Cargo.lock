@@ -1082,6 +1082,7 @@ dependencies = [
  "env_logger",
  "image",
  "lib_cv",
+ "lib_ui",
  "log",
  "rfd",
  "serde",
@@ -3408,7 +3409,6 @@ name = "lib_cv"
 version = "0.1.0"
 dependencies = [
  "calib-targets 0.10.1",
- "eframe",
  "env_logger",
  "image",
  "imageproc 0.26.2",
@@ -3422,6 +3422,14 @@ dependencies = [
  "sift-wgpu",
  "video-rs",
  "vision-calibration",
+]
+
+[[package]]
+name = "lib_ui"
+version = "0.1.0"
+dependencies = [
+ "eframe",
+ "image",
 ]
 
 [[package]]
@@ -5307,6 +5315,7 @@ dependencies = [
  "eframe",
  "env_logger",
  "lib_cv",
+ "lib_ui",
  "log",
  "rfd",
  "serde",

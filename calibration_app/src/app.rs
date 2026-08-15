@@ -16,6 +16,7 @@ use image::load_from_memory;
 use lib_cv::calibration::{
     calibrate_camera, calibrate_multiple_with_inrinsics, update_correspondes_views, update_rigs,
 };
+use lib_ui::utils::dynamic_image_to_color_image;
 use log::{debug, error, info};
 use vision_calibration::{
     core::{CorrespondenceView, NoMeta, RigView},
@@ -23,7 +24,7 @@ use vision_calibration::{
 };
 
 use crate::ui::render_content;
-use lib_cv::video::{VideoPlayer, dynamic_image_to_color_image};
+use lib_cv::video::VideoPlayer;
 
 pub(crate) struct CalibrationApp {
     pub(crate) video_paths: Vec<PathBuf>,
