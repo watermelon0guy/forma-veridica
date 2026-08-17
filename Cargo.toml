@@ -4,6 +4,7 @@ members = [
     # "generate_calibration_pattern",
     "lib_cv",
     "lib_ui",
+    "lib_pipeline",
     "reconstruction_app",
 ]
 resolver = "2"

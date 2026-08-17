@@ -3425,6 +3425,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "lib_pipeline"
+version = "0.1.0"
+dependencies = [
+ "calib-targets 0.10.1",
+ "eframe",
+ "image",
+ "lib_cv",
+ "serde",
+ "serde_yml",
+ "vision-calibration",
+]
+
+[[package]]
 name = "lib_ui"
 version = "0.1.0"
 dependencies = [
