@@ -3419,6 +3419,7 @@ dependencies = [
  "ndarray 0.17.2",
  "optical-flow-lk",
  "rayon",
+ "serde",
  "serde_yml",
  "sift-wgpu",
  "vision-calibration",

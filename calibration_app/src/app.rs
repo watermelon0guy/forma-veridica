@@ -43,6 +43,7 @@ pub(crate) struct CalibrationApp {
     pub(crate) calibration_thread: Option<std::thread::JoinHandle<()>>,
     pub(crate) calibration_result: Option<RigExtrinsicsExport>,
     pub(crate) calibration_error: Option<String>,
+    pub(crate) advanced_params_open: bool,
 }
 
 #[derive(Default)]
@@ -76,6 +77,9 @@ impl Default for CalibrationApp {
             output_path: PathBuf::new(),
             frame_step: 5,
             charuco_board: charuco_target_spec,
+            detection: Default::default(),
+            dataset: Default::default(),
+            solver: Default::default(),
         };
 
         Self {
@@ -93,6 +97,7 @@ impl Default for CalibrationApp {
             calibration_thread: None,
             calibration_result: None,
             calibration_error: None,
+            advanced_params_open: false,
         }
     }
 }
@@ -248,8 +253,20 @@ fn run_calibration_in_thread(
             };
         }
         if reading_vids {
-            update_rigs(&mut img_rigs, &cams_imgs, &charuco_board, 2, 8);
-            update_correspondes_views(&mut correspondence_views, &cams_imgs, &charuco_board, 8)
+            update_rigs(
+                &mut img_rigs,
+                &cams_imgs,
+                &charuco_board,
+                &config.detection,
+                &config.dataset,
+            );
+            update_correspondes_views(
+                &mut correspondence_views,
+                &cams_imgs,
+                &charuco_board,
+                &config.detection,
+                &config.dataset,
+            )
         }
     }
 
@@ -266,7 +283,7 @@ fn run_calibration_in_thread(
                 "Для камеры {cam_idx} нет данных: все обнаружения пусты"
             ));
         }
-        let intrinsic = match calibrate_camera(ccv) {
+        let intrinsic = match calibrate_camera(ccv, &config.solver) {
             Ok(it) => it,
             Err(err) => return Err(format!("Ошибка калибровки для камеры {cam_idx}: {err}")),
         };

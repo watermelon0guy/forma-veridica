@@ -5,7 +5,10 @@ use log::warn;
 
 use crate::{
     app::{CalibrationApp, CalibrationStep, FrameWithCharucoData},
-    ui::{PADDING, components::render_video_card_with_buttons},
+    ui::{
+        PADDING, advanced_params::advanced_params_window,
+        components::render_video_card_with_buttons,
+    },
 };
 
 pub fn align_video_screen(app: &mut CalibrationApp, ui: &mut Ui) {
@@ -52,7 +55,11 @@ pub fn align_video_screen(app: &mut CalibrationApp, ui: &mut Ui) {
 
         if should_detect {
             let gray_img = vp.dynamic_image().to_luma8();
-            let detection_result = get_charuco_marker_first(&app.charuco_board, &gray_img);
+            let detection_result = get_charuco_marker_first(
+                &app.charuco_board,
+                &gray_img,
+                &app.calibration_config.detection,
+            );
 
             match &detection_result {
                 Some(detection_res) => {
@@ -106,6 +113,10 @@ pub fn align_video_screen(app: &mut CalibrationApp, ui: &mut Ui) {
                         }
                     });
                 ui.checkbox(&mut app.draw_charuco_results, "Рисовать ChAruco маркеры");
+                if ui.button("⚙ Дополнительные параметры").clicked() {
+                    app.advanced_params_open = !app.advanced_params_open;
+                }
+                advanced_params_window(app, ui);
                 if ui.button("Начать калибровку").clicked() {
                     for (camera, player) in app
                         .calibration_config

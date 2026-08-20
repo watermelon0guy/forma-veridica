@@ -8,6 +8,7 @@ use crate::{
     },
 };
 
+mod advanced_params;
 mod align_videos_screen;
 mod calibration_screen;
 mod charuco_board_screen;

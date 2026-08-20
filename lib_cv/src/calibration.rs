@@ -31,6 +31,9 @@ use crate::calibration::charuco::{
 };
 
 pub mod charuco;
+pub mod params;
+
+pub use params::{DatasetParams, DetectionParams, SolverParams};
 
 pub fn get_charuco_grid_first(
     charuco_board: &CharucoBoard,
@@ -57,15 +60,17 @@ pub fn get_charuco_grid_first(
 pub fn get_charuco_marker_first(
     charuco_board: &CharucoBoard,
     img: &GrayImage,
+    detection: &DetectionParams,
 ) -> Option<CharucoDetectionResult> {
-    let markers = detect_aruco_markers(img, &charuco_board.spec().dictionary);
+    let markers = detect_aruco_markers(img, &charuco_board.spec().dictionary, detection);
 
     let transforms = build_marker_homographies(&charuco_board, &markers);
     if transforms.is_empty() {
         return None;
     }
-    let corners = interpolate_charuco_corners(charuco_board, &transforms, 2);
-    let mut corners = refine_charuco_corners(charuco_board, corners, &markers, img);
+    let corners =
+        interpolate_charuco_corners(charuco_board, &transforms, detection.min_markers_per_corner);
+    let mut corners = refine_charuco_corners(charuco_board, corners, &markers, img, detection);
     filter_bad_charuco_corners(charuco_board, &mut corners, &markers);
     if corners.is_empty() {
         None
@@ -111,6 +116,7 @@ fn convert_to_charuco_result(
 
 pub fn calibrate_camera(
     correspondence_views: Vec<CorrespondenceView>,
+    solver: &SolverParams,
 ) -> Result<PlanarIntrinsicsExport, Box<dyn std::error::Error>> {
     debug!("Калибровка камеры: {} кадров", correspondence_views.len());
     let mut session = CalibrationSession::<PlanarIntrinsicsProblem>::new();
@@ -119,7 +125,9 @@ pub fn calibrate_camera(
     session.set_input(dataset)?;
 
     let mut filter_option = FilterOptions::default();
-    filter_option.max_reproj_error = 2.0;
+    filter_option.max_reproj_error = solver.max_reproj_error;
+    filter_option.min_points_per_view = solver.min_points_per_view;
+    filter_option.remove_sparse_views = solver.remove_sparse_views;
     planar_intrinsics::run_calibration_with_filtering(&mut session, filter_option)?;
 
     let intrinsics = session.export()?;
@@ -130,8 +138,9 @@ pub fn calibrate_camera(
 pub fn correspondence_view_from_charuco(
     charuco_board: &CharucoBoard,
     img: &image::ImageBuffer<image::Luma<u8>, Vec<u8>>,
+    detection: &DetectionParams,
 ) -> Option<CorrespondenceView> {
-    let charuco_detection = match get_charuco_marker_first(charuco_board, img) {
+    let charuco_detection = match get_charuco_marker_first(charuco_board, img, detection) {
         Some(charuco_det) => charuco_det,
         None => {
             return None;
@@ -177,6 +186,7 @@ pub fn corr_views_to_view_no_meta(corr_views: Vec<CorrespondenceView>) -> Vec<Vi
 pub fn calibrate_multiple_with_charuco_from_images(
     imgs_sets: &Vec<Vec<GrayImage>>,
     charuco_board: &CharucoBoard,
+    detection: &DetectionParams,
 ) -> Result<RigExtrinsicsExport, Box<dyn std::error::Error>> {
     debug!("Start multiple cameras calibration");
     let num_cameras = imgs_sets.len();
@@ -199,6 +209,7 @@ pub fn calibrate_multiple_with_charuco_from_images(
             correspondences.push(correspondence_view_from_charuco(
                 charuco_board,
                 &imgs_sets[cam_idx][set_num],
+                detection,
             ));
         }
 
@@ -226,8 +237,8 @@ pub fn update_rigs(
     rigs: &mut Vec<RigView<NoMeta>>,
     cams_imgs: &Vec<GrayImage>,
     charuco_board: &CharucoBoard,
-    min_correspondences: usize,
-    min_point_in_correspondence: usize,
+    detection: &DetectionParams,
+    dataset: &DatasetParams,
 ) {
     let mut correspondences = Vec::new();
     let num_cameras = cams_imgs.len();
@@ -235,20 +246,22 @@ pub fn update_rigs(
         correspondences.push(correspondence_view_from_charuco(
             charuco_board,
             &cams_imgs[cam_idx],
+            detection,
         ));
     }
 
     for opt_cv in &correspondences {
         if let Some(cv) = opt_cv {
-            if cv.len() < min_point_in_correspondence {
+            if cv.len() < dataset.min_corners_per_view {
                 return;
             }
         }
     }
 
-    // Добавляем риг только если есть данные минимум с 2 камер
+    // Добавляем риг только если есть валидные детекции минимум с
+    // `min_cameras_per_frame` камер
     let valid_cams = correspondences.iter().filter(|c| c.is_some()).count();
-    if valid_cams >= min_correspondences {
+    if valid_cams >= dataset.min_cameras_per_frame {
         let rig_view = RigView {
             obs: RigViewObs {
                 cameras: correspondences,
@@ -263,13 +276,15 @@ pub fn update_correspondes_views(
     correspondence_views: &mut Vec<Vec<Option<CorrespondenceView>>>,
     cams_imgs: &Vec<GrayImage>,
     charuco_board: &CharucoBoard,
-    min_point_in_correspondence: usize,
+    detection: &DetectionParams,
+    dataset: &DatasetParams,
 ) {
     let mut correspondences = Vec::new();
     let num_cameras = cams_imgs.len();
     for cam_idx in 0..num_cameras {
-        let correspondence = correspondence_view_from_charuco(charuco_board, &cams_imgs[cam_idx])
-            .filter(|c| c.points_2d.len() >= min_point_in_correspondence);
+        let correspondence =
+            correspondence_view_from_charuco(charuco_board, &cams_imgs[cam_idx], detection)
+                .filter(|c| c.points_2d.len() >= dataset.min_corners_per_view);
         correspondences.push(correspondence);
     }
 

@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 log = { workspace = true }
 env_logger = { workspace = true }
+serde = { workspace = true }
 image = { workspace = true }
 ffmpeg-next = { workspace = true }
 calib-targets = { workspace = true }

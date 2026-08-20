@@ -14,6 +14,8 @@ use std::collections::HashMap;
 
 use nalgebra::Point2;
 
+use crate::calibration::params::DetectionParams;
+
 /// Quad с ассоциированным контуром
 #[derive(Debug, Clone)]
 pub struct QuadWithContour {
@@ -243,6 +245,7 @@ fn refine_corner(
 pub fn detect_aruco_markers(
     img: &GrayImage,
     dict: &calib_targets::aruco::Dictionary,
+    params: &DetectionParams,
 ) -> Vec<MarkerDetection> {
     // Находим четырехугольники
     let mut quads = find_marker_quads(img);
@@ -261,11 +264,11 @@ pub fn detect_aruco_markers(
 
     // Отбрасываем quads, касающиеся границы изображения
     let (iw, ih) = (img.width() as f32, img.height() as f32);
-    const BORDER: f32 = 3.0;
+    let border = params.border_px;
     quads.retain(|q| {
         q.corners
             .iter()
-            .all(|c| c.x >= BORDER && c.y >= BORDER && c.x < iw - BORDER && c.y < ih - BORDER)
+            .all(|c| c.x >= border && c.y >= border && c.x < iw - border && c.y < ih - border)
     });
 
     if quads.is_empty() {
@@ -279,7 +282,14 @@ pub fn detect_aruco_markers(
 
         // 2. Уточнение через cornerSubPix (локальное уточнение)
         for corner in quad.corners.iter_mut() {
-            refine_corner(img, corner, 5, -1, 30, 0.1);
+            refine_corner(
+                img,
+                corner,
+                params.refine_window_px,
+                -1,
+                params.refine_iterations,
+                params.refine_epsilon,
+            );
         }
     }
 
@@ -312,8 +322,8 @@ pub fn detect_aruco_markers(
     let px_per_square = perimeters[perimeters.len() / 2] / 4.0;
 
     // Фильтруем слишком мелкие и слишком крупные quads
-    let min_perimeter = px_per_square * 4.0 * 0.6;
-    let max_perimeter = px_per_square * 4.0 * 1.4;
+    let min_perimeter = px_per_square * 4.0 * params.min_size_rel;
+    let max_perimeter = px_per_square * 4.0 * params.max_size_rel;
     let filtered_cells: Vec<MarkerCell> = cells
         .into_iter()
         .filter(|cell| {
@@ -341,7 +351,7 @@ pub fn detect_aruco_markers(
         .with_border_bits(1)
         .with_inset_frac(0.04)
         .with_marker_size_rel(1.0)
-        .with_min_border_score(0.75)
+        .with_min_border_score(params.min_border_score)
         .with_dedup_by_id(true)
         .with_multi_threshold(true);
 
@@ -428,9 +438,10 @@ pub fn refine_charuco_corners(
     corners: Vec<(usize, Point2<f32>)>,
     markers: &[MarkerDetection],
     img: &GrayImage,
+    params: &DetectionParams,
 ) -> Vec<(usize, Point2<f32>)> {
     let (w, h) = (img.width() as f32, img.height() as f32);
-    let min_dist_to_border: f32 = 2.0;
+    let min_dist_to_border = params.corner_border_margin_px;
 
     // Build mapping: corner_id -> Vec<marker_corners> from all detected markers
     let mut corner_to_marker_corners: HashMap<usize, Vec<[Point2<f32>; 4]>> = HashMap::new();
@@ -472,11 +483,19 @@ pub fn refine_charuco_corners(
             let ws = (min_dist - 2.0) as i32;
             ws.clamp(1, 10) as u32
         } else {
-            5u32 // fallback when no surrounding markers found
+            // fallback when no surrounding markers found
+            params.refine_window_px
         };
 
         // Apply cornerSubPix
-        refine_corner(img, &mut pt, win_size, -1, 30, 0.1);
+        refine_corner(
+            img,
+            &mut pt,
+            win_size,
+            -1,
+            params.refine_iterations,
+            params.refine_epsilon,
+        );
 
         // Filter: must be inside image with border margin
         if pt.x >= min_dist_to_border

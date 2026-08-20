@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use calib_targets::printable::CharucoTargetSpec;
+use lib_cv::calibration::{DatasetParams, DetectionParams, SolverParams};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -9,6 +10,9 @@ pub struct CalibrationConfig {
     pub output_path: PathBuf,
     pub frame_step: u64,
     pub charuco_board: CharucoTargetSpec,
+    pub detection: DetectionParams,
+    pub dataset: DatasetParams,
+    pub solver: SolverParams,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,6 +33,9 @@ impl CalibrationConfig {
             output_path,
             frame_step,
             charuco_board,
+            detection: DetectionParams::default(),
+            dataset: DatasetParams::default(),
+            solver: SolverParams::default(),
         }
     }
 
@@ -39,6 +46,35 @@ impl CalibrationConfig {
 
         if self.frame_step == 0 {
             return Err("frame_step должен быть больше нуля".to_owned());
+        }
+
+        if self.dataset.min_corners_per_view < 4 {
+            return Err("min_corners_per_view должен быть не меньше 4".to_owned());
+        }
+
+        if self.dataset.min_cameras_per_frame < 2 {
+            return Err("min_cameras_per_frame должен быть не меньше 2".to_owned());
+        }
+
+        if self.solver.max_reproj_error <= 0.0 {
+            return Err("max_reproj_error должен быть больше нуля".to_owned());
+        }
+
+        if self.solver.min_points_per_view < 4 {
+            return Err("min_points_per_view должен быть не меньше 4".to_owned());
+        }
+
+        let det = &self.detection;
+        if det.border_px < 0.0 {
+            return Err("border_px не может быть отрицательным".to_owned());
+        }
+
+        if det.min_size_rel > det.max_size_rel {
+            return Err("min_size_rel не может быть больше max_size_rel".to_owned());
+        }
+
+        if !(0.0..=1.0).contains(&det.min_border_score) {
+            return Err("min_border_score должен быть в диапазоне [0, 1]".to_owned());
         }
 
         for (index, camera) in self.cameras.iter().enumerate() {
@@ -62,7 +98,8 @@ impl CalibrationConfig {
 
     pub fn load_yaml(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
         let file = std::fs::File::open(path)?;
-
-        Ok(serde_yml::from_reader(file)?)
+        let config: Self = serde_yml::from_reader(file)?;
+        config.validate()?;
+        Ok(config)
     }
 }
