@@ -1082,6 +1082,7 @@ dependencies = [
  "env_logger",
  "image",
  "lib_cv",
+ "lib_pipeline",
  "lib_ui",
  "log",
  "rfd",

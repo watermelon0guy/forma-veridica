@@ -107,11 +107,14 @@ pub fn align_video_screen(app: &mut CalibrationApp, ui: &mut Ui) {
                     });
                 ui.checkbox(&mut app.draw_charuco_results, "Рисовать ChAruco маркеры");
                 if ui.button("Начать калибровку").clicked() {
-                    app.offset_in_seconds = app
-                        .video_players
-                        .iter()
-                        .map(|vid| vid.current_time_in_seconds)
-                        .collect();
+                    for (camera, player) in app
+                        .calibration_config
+                        .cameras
+                        .iter_mut()
+                        .zip(app.video_players.iter())
+                    {
+                        camera.start_time_in_seconds = player.current_time_in_seconds;
+                    }
 
                     app.state = CalibrationStep::Calibration;
                 }

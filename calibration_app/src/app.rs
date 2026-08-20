@@ -16,6 +16,7 @@ use image::load_from_memory;
 use lib_cv::calibration::{
     calibrate_camera, calibrate_multiple_with_inrinsics, update_correspondes_views, update_rigs,
 };
+use lib_pipeline::config::CalibrationConfig;
 use lib_ui::utils::dynamic_image_to_color_image;
 use log::{debug, error, info};
 use vision_calibration::{
@@ -27,14 +28,11 @@ use crate::ui::render_content;
 use lib_cv::video::VideoPlayer;
 
 pub(crate) struct CalibrationApp {
-    pub(crate) video_paths: Vec<PathBuf>,
+    pub(crate) calibration_config: CalibrationConfig,
     pub(crate) state: CalibrationStep,
     pub(crate) video_players: Vec<VideoPlayer>,
     pub(crate) video_texture_handles: Vec<TextureHandle>,
-    pub(crate) offset_in_seconds: Vec<f64>,
     pub(crate) _rigs: Vec<RigView<NoMeta>>,
-    pub(crate) charuco_target_spec: CharucoTargetSpec,
-    pub(crate) charuco_square_size: f64,
     pub(crate) charuco_board: CharucoBoard,
     pub(crate) charuco_board_texture_handle: Option<TextureHandle>,
     pub(crate) last_detected_frame_with_charuco: Vec<Option<FrameWithCharucoData>>,
@@ -73,16 +71,21 @@ impl Default for CalibrationApp {
         let charuco_board = CharucoBoard::new(charuco_target_spec.to_board_spec())
             .expect("Неправильные даненые по умолчанию для Charuco");
 
+        let calibration_config = CalibrationConfig {
+            cameras: Vec::new(),
+            output_path: PathBuf::new(),
+            frame_step: 5,
+            charuco_board: charuco_target_spec,
+        };
+
         Self {
-            video_paths: Vec::new(),
+            calibration_config: calibration_config,
             state: CalibrationStep::SetupCharucoBoard,
             video_players: Vec::new(),
-            offset_in_seconds: Vec::new(),
             _rigs: Vec::new(),
             video_texture_handles: Vec::new(),
             charuco_board,
             charuco_board_texture_handle: None,
-            charuco_target_spec,
             last_detected_frame_with_charuco: Vec::new(),
             draw_charuco_results: false,
             calibration_progress: Default::default(),
@@ -90,14 +93,13 @@ impl Default for CalibrationApp {
             calibration_thread: None,
             calibration_result: None,
             calibration_error: None,
-            charuco_square_size: 20.0,
         }
     }
 }
 
 impl CalibrationApp {
     pub(crate) fn num_cameras(&self) -> usize {
-        self.video_paths.len()
+        self.calibration_config.cameras.len()
     }
 
     pub(crate) fn init_videos(&mut self, ctx: &Context) -> Result<(), Box<dyn std::error::Error>> {
@@ -107,8 +109,8 @@ impl CalibrationApp {
 
         let mut players = Vec::new();
 
-        for path in &self.video_paths {
-            match VideoPlayer::new(path) {
+        for path in &self.calibration_config.cameras {
+            match VideoPlayer::new(&path.video_path) {
                 Ok(vp) => players.push(vp),
                 Err(e) => return Err(format!("Проблема при создании плеера: {e}").into()),
             }
@@ -135,8 +137,8 @@ impl CalibrationApp {
     }
 
     pub(crate) fn update_board_from_spec(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        self.charuco_target_spec.square_size_mm = self.charuco_square_size;
-        self.charuco_board = CharucoBoard::new(self.charuco_target_spec.to_board_spec())?;
+        self.charuco_board =
+            CharucoBoard::new(self.calibration_config.charuco_board.to_board_spec())?;
         Ok(())
     }
 
@@ -148,9 +150,8 @@ impl CalibrationApp {
         self.calibration_result_rx = Some(rx);
 
         // Берём данные для калибровки
-        let video_paths = self.video_paths.clone();
+        let config = self.calibration_config.clone();
         let charuco_board = self.charuco_board.clone();
-        let offsets = self.offset_in_seconds.clone();
 
         // Запускаем поток
         let handle = std::thread::spawn(move || {
@@ -162,12 +163,7 @@ impl CalibrationApp {
             }
 
             // Вызываем тяжёлую функцию калибровки
-            let result = run_calibration_in_thread(
-                video_paths.clone(),
-                charuco_board,
-                offsets,
-                Arc::clone(&progress),
-            );
+            let result = run_calibration_in_thread(config, charuco_board, Arc::clone(&progress));
 
             // Отправляем результат назад
             let _ = tx.send(result);
@@ -205,11 +201,9 @@ pub(crate) fn charuco_target_spec_to_dynamic_image(
 }
 
 fn run_calibration_in_thread(
-    video_paths: Vec<PathBuf>,
+    config: CalibrationConfig,
     charuco_board: CharucoBoard,
-    offsets: Vec<f64>,
     progress: Arc<Mutex<CalibrationProgress>>,
-    // ctx: Context,
 ) -> Result<RigExtrinsicsExport, String> {
     let mut img_rigs: Vec<RigView<NoMeta>> = Vec::new();
     // это набор обнаруженных точек на каждой камере ОТДЕЛЬНО
@@ -217,8 +211,8 @@ fn run_calibration_in_thread(
     let mut correspondence_views: Vec<Vec<Option<CorrespondenceView>>> = Vec::new();
 
     let mut video_players: Vec<VideoPlayer> = Vec::new();
-    for path in &video_paths {
-        match VideoPlayer::new(path) {
+    for camera in &config.cameras {
+        match VideoPlayer::new(&camera.video_path) {
             Ok(vp) => video_players.push(vp),
             Err(e) => return Err(format!("Проблема при создании плеера: {e}").into()),
         }
@@ -226,7 +220,7 @@ fn run_calibration_in_thread(
 
     // Переходим к офсетам выбранным на шаге с выравниванием видео
     for (i, player) in video_players.iter_mut().enumerate() {
-        if let Err(e) = player.seek_to_time(offsets[i]) {
+        if let Err(e) = player.seek_to_time(config.cameras[i].start_time_in_seconds) {
             error!("Ошибка перехода к офсету: {}", e);
             return Err(format!("Проблема при создании плеера: {e}").into());
         }
@@ -248,7 +242,7 @@ fn run_calibration_in_thread(
                 p.percent = player.current_frame() as f32 / total_frames as f32;
             }
             cams_imgs.push(player.dynamic_image().to_luma8());
-            if let Err(_) = &player.rewind_forward(5) {
+            if let Err(_) = &player.rewind_forward(config.frame_step) {
                 info!("Видео закончилось");
                 reading_vids = false;
             };
@@ -260,7 +254,7 @@ fn run_calibration_in_thread(
     }
 
     // Транспонируем [frame][cam] -> [cam][frame]
-    let num_cameras = video_paths.len();
+    let num_cameras = config.cameras.len();
     let mut cameras_intrinsics = Vec::new();
     for cam_idx in 0..num_cameras {
         let ccv: Vec<CorrespondenceView> = correspondence_views

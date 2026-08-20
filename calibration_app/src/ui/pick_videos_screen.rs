@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use eframe::egui::{Align, Button, Layout, RichText, Ui};
+use lib_pipeline::config::CameraConfig;
 
 use crate::app::{CalibrationApp, CalibrationStep};
 
@@ -11,8 +12,8 @@ pub fn pick_videos_screen(app: &mut CalibrationApp, ui: &mut Ui) {
                 ui.label("Выберите видео калибровок, чтобы начать");
             }
 
-            for vid in &app.video_paths.clone() {
-                render_video_path(app, ui, vid);
+            for camera in &app.calibration_config.cameras.clone() {
+                render_video_path(app, ui, &camera.video_path);
             }
 
             if ui.button("Добавить видео").clicked() {
@@ -20,7 +21,7 @@ pub fn pick_videos_screen(app: &mut CalibrationApp, ui: &mut Ui) {
             };
 
             let to_align_button = Button::new("Перейти к синхронизации видео");
-            if app.video_paths.len() >= 2 {
+            if app.num_cameras() >= 2 {
                 if ui.add(to_align_button).clicked() {
                     app.state = CalibrationStep::AlignVideos;
                 }
@@ -43,7 +44,9 @@ fn render_video_path(app: &mut CalibrationApp, ui: &mut Ui, path: &PathBuf) {
 
         col_2.with_layout(Layout::top_down(Align::Max), |ui| {
             if ui.button("❌").clicked() {
-                app.video_paths.retain(|p| p != path);
+                app.calibration_config
+                    .cameras
+                    .retain(|c| &c.video_path != path);
             }
         });
     });
@@ -57,8 +60,14 @@ fn select_videos(app: &mut CalibrationApp) {
         .add_filter("Видео", &["mp4", "avi"])
         .pick_files()
     {
-        Some(p) => {
-            app.video_paths = p;
+        Some(paths) => {
+            app.calibration_config.cameras = paths
+                .into_iter()
+                .map(|video_path| CameraConfig {
+                    video_path,
+                    start_time_in_seconds: 0.0,
+                })
+                .collect();
         }
         None => return,
     }

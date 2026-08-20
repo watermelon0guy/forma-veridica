@@ -11,15 +11,20 @@ use lib_ui::utils::{dynamic_image_to_color_image, set_color_image_to_texture_han
 use crate::app::{CalibrationApp, CalibrationStep, charuco_target_spec_to_dynamic_image};
 
 pub fn charuco_board_screen(app: &mut CalibrationApp, ui: &mut Ui) {
-    let dict_len = app.charuco_target_spec.dictionary.codes().len() as u32;
+    let dict_len = app
+        .calibration_config
+        .charuco_board
+        .dictionary
+        .codes()
+        .len() as u32;
 
     let page_margin_mm = 10.0;
 
     Panel::left("parameters").show(ui, |ui| {
         ui.add(
             Slider::new(
-                &mut app.charuco_target_spec.cols,
-                RangeInclusive::new(1, dict_len * 2 / app.charuco_target_spec.rows),
+                &mut app.calibration_config.charuco_board.cols,
+                RangeInclusive::new(1, dict_len * 2 / app.calibration_config.charuco_board.rows),
             )
             .update_while_editing(false)
             .text("Столбцы")
@@ -27,8 +32,8 @@ pub fn charuco_board_screen(app: &mut CalibrationApp, ui: &mut Ui) {
         );
         ui.add(
             Slider::new(
-                &mut app.charuco_target_spec.rows,
-                RangeInclusive::new(1, dict_len * 2 / app.charuco_target_spec.cols),
+                &mut app.calibration_config.charuco_board.rows,
+                RangeInclusive::new(1, dict_len * 2 / app.calibration_config.charuco_board.cols),
             )
             .update_while_editing(false)
             .text("Строчки")
@@ -36,7 +41,7 @@ pub fn charuco_board_screen(app: &mut CalibrationApp, ui: &mut Ui) {
         );
         ui.add(
             Slider::new(
-                &mut app.charuco_target_spec.marker_size_rel,
+                &mut app.calibration_config.charuco_board.marker_size_rel,
                 RangeInclusive::new(0.01, 0.99),
             )
             .update_while_editing(false)
@@ -45,7 +50,7 @@ pub fn charuco_board_screen(app: &mut CalibrationApp, ui: &mut Ui) {
         );
         ui.add(
             Slider::new(
-                &mut app.charuco_square_size,
+                &mut app.calibration_config.charuco_board.square_size_mm,
                 RangeInclusive::new(5.0, 100.0),
             )
             .update_while_editing(false)
@@ -53,19 +58,19 @@ pub fn charuco_board_screen(app: &mut CalibrationApp, ui: &mut Ui) {
             .clamping(SliderClamping::Always),
         );
         ComboBox::from_label("Наборы маркеров")
-            .selected_text(app.charuco_target_spec.dictionary.name())
+            .selected_text(app.calibration_config.charuco_board.dictionary.name())
             .show_ui(ui, |ui| {
                 for d in BUILTIN_DICTIONARY_NAMES {
                     let dict_name = d.to_string();
                     if ui
                         .selectable_label(
-                            app.charuco_target_spec.dictionary.name() == dict_name,
+                            app.calibration_config.charuco_board.dictionary.name() == dict_name,
                             &dict_name,
                         )
                         .clicked()
                     {
                         if let Some(new_dict) = builtin_dictionary(d) {
-                            app.charuco_target_spec.dictionary = new_dict;
+                            app.calibration_config.charuco_board.dictionary = new_dict;
                         }
                     }
                 }
@@ -89,17 +94,17 @@ pub fn charuco_board_screen(app: &mut CalibrationApp, ui: &mut Ui) {
             {
                 let mut save_page_spec = PageSpec::default();
                 save_page_spec.size = PageSize::Custom {
-                    width_mm: app.charuco_target_spec.square_size_mm
-                        * app.charuco_target_spec.cols as f64
+                    width_mm: app.calibration_config.charuco_board.square_size_mm
+                        * app.calibration_config.charuco_board.cols as f64
                         + page_margin_mm * 2.0,
-                    height_mm: app.charuco_target_spec.square_size_mm
-                        * app.charuco_target_spec.rows as f64
+                    height_mm: app.calibration_config.charuco_board.square_size_mm
+                        * app.calibration_config.charuco_board.rows as f64
                         + page_margin_mm * 2.0,
                 };
                 save_page_spec.orientation = PageOrientation::Portrait;
                 save_page_spec.margin_mm = page_margin_mm;
                 match charuco_target_spec_to_dynamic_image(
-                    &app.charuco_target_spec,
+                    &app.calibration_config.charuco_board,
                     300,
                     save_page_spec,
                 ) {
@@ -118,18 +123,22 @@ pub fn charuco_board_screen(app: &mut CalibrationApp, ui: &mut Ui) {
 
     let mut page_spec = PageSpec::default();
     page_spec.size = PageSize::Custom {
-        width_mm: app.charuco_target_spec.square_size_mm * app.charuco_target_spec.cols as f64
+        width_mm: app.calibration_config.charuco_board.square_size_mm
+            * app.calibration_config.charuco_board.cols as f64
             + page_margin_mm * 2.0,
-        height_mm: app.charuco_target_spec.square_size_mm * app.charuco_target_spec.rows as f64
+        height_mm: app.calibration_config.charuco_board.square_size_mm
+            * app.calibration_config.charuco_board.rows as f64
             + page_margin_mm * 2.0,
     };
     page_spec.orientation = PageOrientation::Portrait;
     page_spec.margin_mm = page_margin_mm;
 
     eframe::egui::CentralPanel::default().show(ui, |ui| {
-        if let Ok(image) =
-            charuco_target_spec_to_dynamic_image(&app.charuco_target_spec, 60, page_spec)
-        {
+        if let Ok(image) = charuco_target_spec_to_dynamic_image(
+            &app.calibration_config.charuco_board,
+            60,
+            page_spec,
+        ) {
             match &mut app.charuco_board_texture_handle {
                 Some(texture) => {
                     set_color_image_to_texture_handle(&image, texture);

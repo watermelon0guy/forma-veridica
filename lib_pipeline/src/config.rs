@@ -2,7 +2,6 @@ use std::path::{Path, PathBuf};
 
 use calib_targets::printable::CharucoTargetSpec;
 use serde::{Deserialize, Serialize};
-use vision_calibration::common::config;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CalibrationConfig {
@@ -10,6 +9,12 @@ pub struct CalibrationConfig {
     pub output_path: PathBuf,
     pub frame_step: u64,
     pub charuco_board: CharucoTargetSpec,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CameraConfig {
+    pub video_path: PathBuf,
+    pub start_time_in_seconds: f64,
 }
 
 impl CalibrationConfig {
@@ -60,10 +65,4 @@ impl CalibrationConfig {
 
         Ok(serde_yml::from_reader(file)?)
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CameraConfig {
-    pub video_path: PathBuf,
-    pub start_time_in_seconds: f64,
 }
