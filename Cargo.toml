@@ -17,7 +17,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_yml = "0.0.13"
 rfd = "0.17.2"
 image = "0.25.10"
-video-rs = { version = "0.11.0", features = ["ndarray"] }
+ffmpeg-next = { version = "9.0.0", default-features = false, features = ["codec", "format", "software-scaling"] }
 calib-targets = "0.10.1"
 vision-calibration="0.7.0"
 sift-wgpu="0.1.0"

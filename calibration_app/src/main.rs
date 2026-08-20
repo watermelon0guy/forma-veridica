@@ -8,10 +8,6 @@ fn main() -> eframe::Result<()> {
         .filter_module("lib_cv", log::LevelFilter::Debug)
         .init();
 
-    if let Err(e) = video_rs::init() {
-        log::error!("Failed to initialize video_rs(ffmpeg): {}", e);
-    }
-
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_inner_size([1000.0, 700.0])
