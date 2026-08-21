@@ -27,23 +27,19 @@ enum Commands {
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
-    match cli.command {
+    let result = match cli.command {
         Some(Commands::Run {
             config_path: config,
-        }) => match run_cli(config) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(e) => {
-                eprintln!("Ошибка CLI: {e}");
-                ExitCode::FAILURE
-            }
-        },
-        None => match run_gui() {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(e) => {
-                eprintln!("Ошибка CLI: {e}");
-                ExitCode::FAILURE
-            }
-        },
+        }) => run_cli(config).map_err(|e| format!("Ошибка GUI: {e}")),
+        None => run_gui().map_err(|e| format!("Ошибка GUI: {e}")),
+    };
+
+    match result {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("{e}");
+            ExitCode::FAILURE
+        }
     }
 }
 
