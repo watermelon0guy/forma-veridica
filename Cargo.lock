@@ -3430,9 +3430,9 @@ name = "lib_pipeline"
 version = "0.1.0"
 dependencies = [
  "calib-targets 0.10.1",
- "eframe",
  "image",
  "lib_cv",
+ "log",
  "serde",
  "serde_yml",
  "vision-calibration",

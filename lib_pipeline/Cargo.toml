@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 image = { workspace = true }
-eframe = { workspace = true }
+log = { workspace = true }
 lib_cv = { path = "../lib_cv" }
 vision-calibration = { workspace = true }
 calib-targets = { workspace = true }
