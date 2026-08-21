@@ -11,14 +11,11 @@ use vision_calibration::rig_extrinsics::RigExtrinsicsExport;
 
 use crate::config::CalibrationConfig;
 
-/// Прогресс: значение в диапазоне 0.0..1.0.
-pub type ProgressCallback<'a> = &'a mut dyn FnMut(f32);
-
 /// Полный прогон калибровки по конфигу: чтение видео, детекция ChArUco,
 /// покамерная калибровка интринсиков и финальная калибровка рига.
 pub fn run_calibration(
     config: &CalibrationConfig,
-    on_progress: ProgressCallback,
+    on_progress: &mut dyn FnMut(f32),
 ) -> Result<RigExtrinsicsExport, String> {
     let charuco_board = CharucoBoard::new(config.charuco_board.to_board_spec())
         .map_err(|e| format!("Неправильные данные Charuco-доски в конфиге: {e}"))?;

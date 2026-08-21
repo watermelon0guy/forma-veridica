@@ -1078,6 +1078,7 @@ name = "calibration_app"
 version = "0.1.0"
 dependencies = [
  "calib-targets 0.10.1",
+ "clap",
  "eframe",
  "env_logger",
  "image",
