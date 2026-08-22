@@ -25,13 +25,16 @@ enum Commands {
 }
 
 fn main() -> ExitCode {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn"))
+        .filter_module("calibration_app", log::LevelFilter::Debug)
+        .filter_module("lib_cv", log::LevelFilter::Debug)
+        .init();
+
     let cli = Cli::parse();
 
     let result = match cli.command {
-        Some(Commands::Run {
-            config_path: config,
-        }) => run_cli(config).map_err(|e| format!("Ошибка GUI: {e}")),
-        None => run_gui().map_err(|e| format!("Ошибка GUI: {e}")),
+        Some(Commands::Run { config_path }) => run_cli(config_path),
+        None => run_gui().map_err(|e| e.into()),
     };
 
     match result {
@@ -68,11 +71,6 @@ fn run_cli(config_path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn run_gui() -> Result<(), eframe::Error> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn"))
-        .filter_module("calibration_app", log::LevelFilter::Debug)
-        .filter_module("lib_cv", log::LevelFilter::Debug)
-        .init();
-
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_inner_size([1000.0, 700.0])
