@@ -5,7 +5,7 @@ use lib_cv::calibration::{
     calibrate_camera, calibrate_multiple_with_inrinsics, update_correspondes_views, update_rigs,
 };
 use lib_cv::video::VideoPlayer;
-use log::{debug, error, info};
+use log::{error, info, trace};
 use vision_calibration::core::{CorrespondenceView, NoMeta, RigView};
 use vision_calibration::rig_extrinsics::RigExtrinsicsExport;
 
@@ -51,7 +51,7 @@ pub fn run_calibration(
     while reading_vids {
         let mut cams_imgs = Vec::new();
         for player in &mut video_players {
-            debug!(
+            trace!(
                 "Кадр:{}, время: {}",
                 player.current_frame(),
                 player.current_time_in_seconds

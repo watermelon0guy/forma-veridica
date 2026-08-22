@@ -8,7 +8,7 @@ use image::GrayImage;
 use imageproc::{
     contours::find_contours, contrast::adaptive_threshold, geometry::approximate_polygon_dp,
 };
-use log::debug;
+use log::trace;
 use rayon::prelude::*;
 use std::collections::HashMap;
 
@@ -249,7 +249,7 @@ pub fn detect_aruco_markers(
 ) -> Vec<MarkerDetection> {
     // Находим четырехугольники
     let mut quads = find_marker_quads(img);
-    debug!(
+    trace!(
         "detect_aruco_markers: image={}x{}, quads_found={}",
         img.width(),
         img.height(),
@@ -336,7 +336,7 @@ pub fn detect_aruco_markers(
             p >= min_perimeter && p <= max_perimeter
         })
         .collect();
-    debug!(
+    trace!(
         "detect_aruco_markers: {} cells after size filter (min={:.0}, max={:.0})",
         filtered_cells.len(),
         min_perimeter,
@@ -377,7 +377,7 @@ pub fn build_marker_homographies(
         let (sx, sy) = match board.marker_cell(marker.id as i32) {
             Some(cell) => cell,
             None => {
-                debug!(
+                trace!(
                     "build_marker_homographies: marker id={} not on board",
                     marker.id
                 );
@@ -396,7 +396,7 @@ pub fn build_marker_homographies(
         let dst = match marker.corners_img {
             Some(img_corners) => img_corners,
             None => {
-                debug!(
+                trace!(
                     "build_marker_homographies: marker id={} has no corners_img",
                     marker.id
                 );
@@ -409,19 +409,19 @@ pub fn build_marker_homographies(
             if det > 1e-6 {
                 transforms.insert(marker.id, h);
             } else {
-                debug!(
+                trace!(
                     "build_marker_homographies: marker id={} singular homography (det={:.2e})",
                     marker.id, det
                 );
             }
         } else {
-            debug!(
+            trace!(
                 "build_marker_homographies: marker id={} homography_from_4pt returned None",
                 marker.id
             );
         }
     }
-    debug!(
+    trace!(
         "build_marker_homographies: {} valid transforms from {} markers",
         transforms.len(),
         markers.len()
@@ -507,7 +507,7 @@ pub fn refine_charuco_corners(
         }
     }
 
-    debug!(
+    trace!(
         "refine_charuco_corners: {} refined (from {} raw)",
         refined.len(),
         refined.capacity()
@@ -614,7 +614,7 @@ pub fn filter_bad_charuco_corners(
 
     let removed = before - corners.len();
     if removed > 0 {
-        debug!(
+        trace!(
             "filter_bad_charuco_corners: removed {}/{} bad corners",
             removed, before
         );
@@ -673,7 +673,7 @@ pub fn interpolate_charuco_corners(
             }
         }
     }
-    debug!(
+    trace!(
         "interpolate_charuco_corners: {} corners (from {} transforms)",
         corners.len(),
         transforms.len()
@@ -859,7 +859,7 @@ pub fn find_marker_quads(gray: &GrayImage) -> Vec<QuadWithContour> {
         let binary = adaptive_threshold(gray, win_size, 7);
 
         let contours: Vec<imageproc::contours::Contour<i32>> = find_contours(&binary);
-        debug!(
+        trace!(
             "find_marker_quads: win={}, {} raw contours",
             win_size,
             contours.len()
@@ -908,9 +908,9 @@ pub fn find_marker_quads(gray: &GrayImage) -> Vec<QuadWithContour> {
             all_quads.push(QuadWithContour { corners, contour });
             kept += 1;
         }
-        debug!("find_marker_quads: win={}, kept={} quads", win_size, kept);
+        trace!("find_marker_quads: win={}, kept={} quads", win_size, kept);
     }
-    debug!("find_marker_quads: total quads={}", all_quads.len());
+    trace!("find_marker_quads: total quads={}", all_quads.len());
     all_quads
 }
 

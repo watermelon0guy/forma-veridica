@@ -25,10 +25,7 @@ enum Commands {
 }
 
 fn main() -> ExitCode {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn"))
-        .filter_module("calibration_app", log::LevelFilter::Debug)
-        .filter_module("lib_cv", log::LevelFilter::Debug)
-        .init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let cli = Cli::parse();
 

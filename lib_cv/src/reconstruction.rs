@@ -1,6 +1,6 @@
 use kiddo::SquaredEuclidean;
 use kiddo::immutable::float::kdtree::ImmutableKdTree;
-use log::{debug, error, info, warn};
+use log::{debug, info, trace, warn};
 use nalgebra::{DMatrix, Matrix3, Matrix3x4, Point2, Point3, SVD, Vector3};
 use sift::{KeyPoint, Sift};
 use std::num::NonZero;
@@ -165,11 +165,9 @@ pub fn triangulate_points_multiple(
     camera_params: &RigExtrinsicsExport,
 ) -> Result<Vec<PointContainer>, Box<dyn std::error::Error>> {
     if points_2d.len() < 2 || camera_params.cameras.len() < 2 {
-        error!("Недостаточно камер или наборов точек");
         return Err("Требуется минимум 2 камеры для триангуляции".into());
     }
     if points_2d.len() != camera_params.cameras.len() {
-        error!("Количество наборов точек не соответствует количеству камер");
         return Err("Количество списков точек должно совпадать с количеством камер".into());
     }
 
@@ -194,14 +192,14 @@ pub fn triangulate_points_multiple(
             cam.dist.p1,
             cam.dist.p2
         );
-        debug!(
+        trace!(
             "  rig->cam: t=({:.3},{:.3},{:.3}) R_angle={:.1}°",
             iso.translation.x,
             iso.translation.y,
             iso.translation.z,
             iso.rotation.angle().to_degrees()
         );
-        debug!(
+        trace!(
             "  R matrix: [{:.3},{:.3},{:.3}; {:.3},{:.3},{:.3}; {:.3},{:.3},{:.3}]",
             iso.rotation.to_rotation_matrix()[(0, 0)],
             iso.rotation.to_rotation_matrix()[(0, 1)],
@@ -262,7 +260,7 @@ fn triangulate_points(
 
         let w = x_homog[3];
         if w.abs() < 1e-12 {
-            warn!("Точка {} на бесконечности (w ≈ 0), пропускаем", pt_i);
+            trace!("Точка {} на бесконечности (w ≈ 0), пропускаем", pt_i);
             continue;
         }
 
@@ -291,7 +289,7 @@ fn triangulate_points(
 
         // Логируем первые 5 точек для диагностики
         if pt_i < 5 {
-            debug!(
+            trace!(
                 "Точка {pt_i}: 3D=({x:.2},{y:.2},{z:.2}) reproj_err={avg_error:.2}px conf={confidence:.2}"
             );
         }

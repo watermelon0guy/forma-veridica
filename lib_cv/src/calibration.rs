@@ -8,7 +8,7 @@ use calib_targets::{
     detect::detect_charuco_best,
 };
 use image::GrayImage;
-use log::{debug, error, info, warn};
+use log::{debug, info, trace, warn};
 use nalgebra::{Point2, Point3};
 use vision_calibration::{
     core::{
@@ -43,7 +43,7 @@ pub fn get_charuco_grid_first(
     let params_sweep = CharucoParams::sweep_for_board(&board_spec);
     match detect_charuco_best(img, &params_sweep) {
         Ok(result) => {
-            debug!(
+            trace!(
                 "get_charuco_grid_first: {} corners, {} markers",
                 result.corners.len(),
                 result.markers.len()
@@ -195,8 +195,9 @@ pub fn calibrate_multiple_with_charuco_from_images(
         imgs_sets.len()
     );
     if imgs_sets.len() < 2 {
-        error!("Ошибка: для калибровки требуется как минимум 2 набора изображений.");
-        return Err("Недостаточно камер".into());
+        return Err(
+            "Недостаточно камер: для калибровки требуется как минимум 2 набора изображений".into(),
+        );
     }
 
     let num_frames = imgs_sets[0].len();
@@ -307,8 +308,9 @@ pub fn calibrate_multiple(
     debug!("Камер: {num_cameras}, кадров: {num_frames}");
 
     if num_cameras < 2 {
-        error!("Ошибка: для калибровки требуется как минимум 2 набора изображений.");
-        return Err("Недостаточно камер".into());
+        return Err(
+            "Недостаточно камер: для калибровки требуется как минимум 2 набора изображений".into(),
+        );
     }
 
     let rig_dataset = RigExtrinsicsInput::new(rigs, num_cameras)?;
@@ -353,8 +355,9 @@ pub fn calibrate_multiple_with_inrinsics(
     debug!("Камер: {num_cameras}, кадров: {num_frames}");
 
     if num_cameras < 2 {
-        error!("Ошибка: для калибровки требуется как минимум 2 набора изображений.");
-        return Err("Недостаточно камер".into());
+        return Err(
+            "Недостаточно камер: для калибровки требуется как минимум 2 набора изображений".into(),
+        );
     }
 
     let rig_dataset = RigExtrinsicsInput::new(rigs, num_cameras)?;
@@ -390,6 +393,21 @@ pub fn calibrate_multiple_with_inrinsics(
     step_rig_init(&mut session)?;
     step_rig_optimize(&mut session, None)?;
     let result: RigExtrinsicsExport = session.export()?;
+
+    // Диагностика результата — те же ключевые метрики, что и в calibrate_multiple
+    for (i, cam) in result.cameras.iter().enumerate() {
+        let k = cam.k.k_matrix();
+        info!(
+            "Камера {i}: fx={:.1} fy={:.1} cx={:.1} cy={:.1} k1={:.4} k2={:.4}",
+            k[(0, 0)],
+            k[(1, 1)],
+            k[(0, 2)],
+            k[(1, 2)],
+            cam.dist.k1,
+            cam.dist.k2
+        );
+    }
+    info!("mean_reproj_error: {:.2} px", result.mean_reproj_error);
 
     Ok(result)
 }
