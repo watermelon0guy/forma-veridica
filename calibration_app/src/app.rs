@@ -182,6 +182,17 @@ impl CalibrationApp {
 
         self.calibration_thread = Some(handle);
     }
+
+    pub(crate) fn sync_offsets_from_players(&mut self) {
+        for (camera, player) in self
+            .calibration_config
+            .cameras
+            .iter_mut()
+            .zip(self.video_players.iter())
+        {
+            camera.start_time_in_seconds = player.current_time_in_seconds;
+        }
+    }
 }
 
 impl App for CalibrationApp {

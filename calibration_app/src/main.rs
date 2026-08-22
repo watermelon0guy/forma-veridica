@@ -19,8 +19,8 @@ enum Commands {
     /// Headless-запуск калибровки
     Run {
         /// Путь к YAML к конфигу
-        #[arg(short, long)]
         config_path: PathBuf,
+        output_path: PathBuf,
     },
 }
 
@@ -33,7 +33,10 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
 
     let result = match cli.command {
-        Some(Commands::Run { config_path }) => run_cli(config_path),
+        Some(Commands::Run {
+            config_path,
+            output_path,
+        }) => run_cli(config_path, output_path),
         None => run_gui().map_err(|e| e.into()),
     };
 
@@ -46,10 +49,10 @@ fn main() -> ExitCode {
     }
 }
 
-fn run_cli(config_path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
-    let config = CalibrationConfig::load_yaml(&config_path)
+fn run_cli(config_path: PathBuf, output_path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    let mut config = CalibrationConfig::load_yaml(&config_path)
         .map_err(|e| format!("Ошибка загрузки конфига: {}", e))?;
-
+    config.output_path = output_path;
     let mut last_printed = 0u8;
     let mut on_progress = |p: f32| {
         let step = (p * 10.0) as u8;

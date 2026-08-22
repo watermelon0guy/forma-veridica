@@ -117,15 +117,20 @@ pub fn align_video_screen(app: &mut CalibrationApp, ui: &mut Ui) {
                     app.advanced_params_open = !app.advanced_params_open;
                 }
                 advanced_params_window(app, ui);
-                if ui.button("Начать калибровку").clicked() {
-                    for (camera, player) in app
-                        .calibration_config
-                        .cameras
-                        .iter_mut()
-                        .zip(app.video_players.iter())
+                if ui.button("Сохранить конфигурацию в файл").clicked() {
+                    app.sync_offsets_from_players();
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("yaml", &["yml", "yaml"])
+                        .save_file()
                     {
-                        camera.start_time_in_seconds = player.current_time_in_seconds;
+                        let path = path.with_extension("yaml");
+                        if let Err(error) = app.calibration_config.save_to_yaml(&path) {
+                            log::error!("Не удалось сохранить конфигурацию: {error}");
+                        }
                     }
+                }
+                if ui.button("Начать калибровку").clicked() {
+                    app.sync_offsets_from_players();
 
                     app.state = CalibrationStep::Calibration;
                 }
