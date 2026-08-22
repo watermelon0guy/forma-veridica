@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 lib_cv = { path = "../lib_cv" }
 lib_ui = { path = "../lib_ui" }
+lib_pipeline = { path = "../lib_pipeline" }
 log = { workspace = true }
 env_logger = { workspace = true }
 eframe = { workspace = true }

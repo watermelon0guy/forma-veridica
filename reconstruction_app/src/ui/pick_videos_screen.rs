@@ -1,14 +1,15 @@
 use std::path::PathBuf;
 
 use eframe::egui::{Align, Button, CentralPanel, Color32, Layout, RichText, Ui};
+use lib_pipeline::config::CameraConfig;
 
 use crate::app::{PipelineState, ReconstructionApp};
 
 pub fn pick_videos_screen(app: &mut ReconstructionApp, ui: &mut Ui) {
     CentralPanel::default().show(ui, |ui| {
         ui.vertical_centered(|ui| {
-            for vid in &app.video_paths.clone() {
-                render_video_path(app, ui, vid);
+            for cam in &app.reconstruction_config.cameras.clone() {
+                render_video_path(app, ui, &cam.video_path);
             }
 
             if ui.button("Добавить видео").clicked() {
@@ -20,17 +21,17 @@ pub fn pick_videos_screen(app: &mut ReconstructionApp, ui: &mut Ui) {
                 Some(num_cameras) => num_cameras,
             };
 
-            if app.video_paths.len() == num_cameras {
+            if app.reconstruction_config.cameras.len() == num_cameras {
                 let to_align_button = Button::new("Перейти к выравниванию");
                 if ui.add(to_align_button).clicked() {
                     app.state = PipelineState::AlignVideos;
                 }
-            } else if app.video_paths.len() < num_cameras {
+            } else if app.reconstruction_config.cameras.len() < num_cameras {
                 ui.label(
                     RichText::new(format!(
                         "Выбрано слишком мало видео: нужно {}, выбрано {}",
                         num_cameras,
-                        app.video_paths.len()
+                        app.reconstruction_config.cameras.len()
                     ))
                     .color(Color32::RED),
                 );
@@ -39,7 +40,7 @@ pub fn pick_videos_screen(app: &mut ReconstructionApp, ui: &mut Ui) {
                     RichText::new(format!(
                         "Выбрано слишком много видео: нужно {}, выбрано {}",
                         num_cameras,
-                        app.video_paths.len()
+                        app.reconstruction_config.cameras.len()
                     ))
                     .color(Color32::RED),
                 );
@@ -62,7 +63,9 @@ fn render_video_path(app: &mut ReconstructionApp, ui: &mut Ui, path: &PathBuf) {
 
         col_2.with_layout(Layout::top_down(Align::Max), |ui| {
             if ui.button("❌").clicked() {
-                app.video_paths.retain(|p| p != path);
+                app.reconstruction_config
+                    .cameras
+                    .retain(|camera| &camera.video_path != path);
             }
         });
     });
@@ -76,8 +79,9 @@ fn select_videos(app: &mut ReconstructionApp) {
         .add_filter("Видео", &["mp4", "avi"])
         .pick_files()
     {
-        Some(p) => {
-            app.video_paths = p;
+        Some(paths) => {
+            app.reconstruction_config.cameras =
+                paths.iter().map(|p| CameraConfig::new(p)).collect();
         }
         None => return,
     }

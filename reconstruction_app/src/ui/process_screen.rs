@@ -1,6 +1,6 @@
 use std::sync::mpsc::TryRecvError;
 
-use eframe::egui::{CentralPanel, Ui};
+use eframe::egui::{CentralPanel, ProgressBar, Ui};
 
 use crate::app::ReconstructionApp;
 
@@ -43,9 +43,14 @@ pub fn process_screen(app: &mut ReconstructionApp, ui: &mut Ui) {
             if app.pipeline_thread.is_some() || app.pipeline_result_rx.is_some() {
                 ui.heading("Выполняется реконструкция...");
                 ui.add_space(20.0);
-                ui.spinner();
-                ui.add_space(10.0);
-                ui.label("Обработка кадров, сохранение PLY-файлов в point_clouds/");
+
+                let progress = app.reconstruction_progress.lock().unwrap();
+
+                let progress_bar = ProgressBar::new(progress.percent)
+                    .text(format!("{:.0}%", progress.percent * 100.0))
+                    .animate(true)
+                    .desired_width(400.0);
+                ui.add(progress_bar);
             } else if let Some(ref result) = app.pipeline_result {
                 match result {
                     Ok(()) => {

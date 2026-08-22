@@ -4,6 +4,7 @@ use log::{debug, info, trace, warn};
 use nalgebra::{DMatrix, Matrix3, Matrix3x4, Point2, Point3, SVD, Vector3};
 use sift::{KeyPoint, Sift};
 use std::num::NonZero;
+use std::path::PathBuf;
 use vision_calibration::core::{Iso3, PinholeCamera};
 use vision_calibration::rig_extrinsics::RigExtrinsicsExport;
 
@@ -531,10 +532,7 @@ pub fn filter_point_cloud_by_confidence(cloud: &mut PointCloud, threshold: f32) 
 }
 
 /// Сохраняет облако точек в формате PLY (Point Cloud Library).
-pub fn save_point_cloud<P: AsRef<std::path::Path>>(
-    cloud: &PointCloud,
-    path: P,
-) -> std::io::Result<()> {
+pub fn save_point_cloud(cloud: &PointCloud, path: PathBuf) -> std::io::Result<()> {
     use std::io::Write;
     let mut file = std::fs::File::create(path)?;
 

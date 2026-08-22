@@ -29,7 +29,7 @@ pub fn calibration_screen(app: &mut CalibrationApp, ui: &mut Ui) {
                     app.calibration_result_rx = None;
                 }
                 Err(TryRecvError::Empty) => {
-                    // Ещё работает - продолжаем ждать
+                    // Ещё работает
                 }
                 Err(TryRecvError::Disconnected) => {
                     app.calibration_thread = None;

@@ -1,7 +1,4 @@
-use std::{
-    path::PathBuf,
-    sync::{Arc, Mutex, mpsc},
-};
+use std::sync::{Arc, Mutex, mpsc};
 
 use calib_targets::{
     aruco::builtins::DICT_6X6_100,
@@ -69,18 +66,8 @@ impl Default for CalibrationApp {
         let charuco_board = CharucoBoard::new(charuco_target_spec.to_board_spec())
             .expect("Неправильные даненые по умолчанию для Charuco");
 
-        let calibration_config = CalibrationConfig {
-            cameras: Vec::new(),
-            output_path: PathBuf::new(),
-            frame_step: 5,
-            charuco_board: charuco_target_spec,
-            detection: Default::default(),
-            dataset: Default::default(),
-            solver: Default::default(),
-        };
-
         Self {
-            calibration_config: calibration_config,
+            calibration_config: CalibrationConfig::new(charuco_target_spec),
             state: CalibrationStep::SetupCharucoBoard,
             video_players: Vec::new(),
             _rigs: Vec::new(),
@@ -158,7 +145,9 @@ impl CalibrationApp {
         let handle = std::thread::spawn(move || {
             // Устанавливаем начальный статус
             {
-                let mut p = progress.lock().unwrap();
+                let mut p = progress
+                    .lock()
+                    .expect("Вызвали почему то два раза lock. Ошибка в коде");
                 p.is_running = true;
                 p.percent = 0.0;
             }

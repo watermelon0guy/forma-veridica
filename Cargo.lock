@@ -5330,6 +5330,7 @@ dependencies = [
  "eframe",
  "env_logger",
  "lib_cv",
+ "lib_pipeline",
  "lib_ui",
  "log",
  "rfd",
