@@ -131,18 +131,20 @@ pub fn run_reconstruction(
         .collect::<Result<_, _>>()?;
 
     // Применяем смещения времени
-    for (i, p) in players.iter_mut().enumerate() {
-        if i < config.cameras.len() {
-            p.seek_to_time(config.cameras[i].start_time_in_seconds)
-                .map_err(|e| e.to_string())?;
-        }
+    for (player, cam) in players.iter_mut().zip(&config.cameras) {
+        player
+            .seek_to_time(cam.start_time_in_seconds)
+            .map_err(|e| e.to_string())?;
     }
 
     // --- Первый кадр: SIFT + matching ---
     let first_frames: Vec<_> = players.iter().map(|p| p.dynamic_image().clone()).collect();
 
-    let (all_matches, all_keypoints) =
-        match_with_epipolar_constraint(&first_frames, &calibration_data, 15.0);
+    let (all_matches, all_keypoints) = match_with_epipolar_constraint(
+        &first_frames,
+        &calibration_data,
+        config.params.epipolar_threshold_px,
+    );
 
     let filtered_matches = min_visible_match_set(&all_matches, all_keypoints[0].len());
 
@@ -175,12 +177,12 @@ pub fn run_reconstruction(
         cloud.points.len()
     );
 
-    std::fs::create_dir_all("point_clouds").map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&config.output_dir).map_err(|e| e.to_string())?;
     save_point_cloud(
         &cloud,
-        config
+        &config
             .output_dir
-            .with_file_name(format!("frame_{current_frame:04}.ply")),
+            .join(format!("frame_{current_frame:04}.ply")),
     )
     .map_err(|e| e.to_string())?;
 
@@ -190,7 +192,7 @@ pub fn run_reconstruction(
     let mut prev_points = points_2d_raw;
 
     // --- Цикл по оставшимся кадрам ---
-    let total_frames = players[0].total_frames();
+    let total_frames = players.iter().map(|p| p.total_frames()).max().unwrap_or(1);
     let mut frame_idx: usize = 1;
 
     loop {
@@ -249,13 +251,11 @@ pub fn run_reconstruction(
 
         add_color_to_point_cloud(&mut cloud, &new_points[0], &curr_frames[0]);
 
-        filter_point_cloud_by_confidence(&mut cloud, 0.05);
+        filter_point_cloud_by_confidence(&mut cloud, config.params.min_confidence);
 
         save_point_cloud(
             &cloud,
-            config
-                .output_dir
-                .with_file_name(format!("frame_{frame_idx:04}.ply")),
+            &config.output_dir.join(format!("frame_{frame_idx:04}.ply")),
         )
         .map_err(|e| e.to_string())?;
 
@@ -263,7 +263,9 @@ pub fn run_reconstruction(
         prev_points = new_points;
         frame_idx += 1;
 
-        if players[0].current_frame() >= total_frames - config.params.frame_step {
+        on_progress(players[0].current_frame() as f32 / total_frames as f32);
+
+        if players[0].current_frame() >= total_frames.saturating_sub(config.params.frame_step) {
             break;
         }
     }

@@ -22,7 +22,7 @@ pub struct CameraConfig {
 }
 
 impl CameraConfig {
-    pub fn new(video_path: &PathBuf) -> Self {
+    pub fn new(video_path: &Path) -> Self {
         Self {
             video_path: video_path.to_path_buf(),
             start_time_in_seconds: 0.0,

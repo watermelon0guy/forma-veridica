@@ -4,10 +4,7 @@ mod model;
 mod ui;
 
 fn main() -> eframe::Result<()> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn"))
-        .filter_module("reconstruction_app", log::LevelFilter::Debug)
-        .filter_module("lib_cv", log::LevelFilter::Debug)
-        .init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()

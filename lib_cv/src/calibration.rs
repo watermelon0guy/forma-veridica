@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::Path;
 
 use calib_targets::{
     Coord,
@@ -184,7 +184,7 @@ pub fn corr_views_to_view_no_meta(corr_views: Vec<CorrespondenceView>) -> Vec<Vi
 }
 
 pub fn calibrate_multiple_with_charuco_from_images(
-    imgs_sets: &Vec<Vec<GrayImage>>,
+    imgs_sets: &[Vec<GrayImage>],
     charuco_board: &CharucoBoard,
     detection: &DetectionParams,
 ) -> Result<RigExtrinsicsExport, Box<dyn std::error::Error>> {
@@ -236,7 +236,7 @@ pub fn calibrate_multiple_with_charuco_from_images(
 
 pub fn update_rigs(
     rigs: &mut Vec<RigView<NoMeta>>,
-    cams_imgs: &Vec<GrayImage>,
+    cams_imgs: &[GrayImage],
     charuco_board: &CharucoBoard,
     detection: &DetectionParams,
     dataset: &DatasetParams,
@@ -275,7 +275,7 @@ pub fn update_rigs(
 
 pub fn update_correspondes_views(
     correspondence_views: &mut Vec<Vec<Option<CorrespondenceView>>>,
-    cams_imgs: &Vec<GrayImage>,
+    cams_imgs: &[GrayImage],
     charuco_board: &CharucoBoard,
     detection: &DetectionParams,
     dataset: &DatasetParams,
@@ -416,7 +416,7 @@ pub fn calibrate_multiple_with_inrinsics(
 /// остатков каждой отдельной точки. Полная диагностика может содержать больше
 /// 65 536 элементов, что превышает лимит последовательности `serde_yml`.
 pub fn save_calibration_to_yaml(
-    path: &PathBuf,
+    path: &Path,
     calibration: &RigExtrinsicsExport,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut compact = calibration.clone();
@@ -428,7 +428,7 @@ pub fn save_calibration_to_yaml(
 }
 
 pub fn load_calibration_from_yaml(
-    path: &PathBuf,
+    path: &Path,
 ) -> Result<RigExtrinsicsExport, Box<dyn std::error::Error>> {
     let yaml = std::fs::read_to_string(path)?;
     // Старые файлы могли быть сохранены с десятками тысяч подробных

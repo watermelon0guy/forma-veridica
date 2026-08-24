@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::Path;
 
 use eframe::egui::{Align, Button, CentralPanel, Color32, Layout, RichText, Ui};
 use lib_pipeline::config::CameraConfig;
@@ -49,7 +49,7 @@ pub fn pick_videos_screen(app: &mut ReconstructionApp, ui: &mut Ui) {
     });
 }
 
-fn render_video_path(app: &mut ReconstructionApp, ui: &mut Ui, path: &PathBuf) {
+fn render_video_path(app: &mut ReconstructionApp, ui: &mut Ui, path: &Path) {
     let file_name = path
         .file_name()
         .and_then(|name| name.to_str())

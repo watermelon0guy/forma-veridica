@@ -100,6 +100,7 @@ impl ReconstructionApp {
         let calib = match &self.calibration_data {
             Some(c) => c.clone(),
             None => {
+                self.pipeline_result = Some(Err("Нет данных калибровки".into()));
                 self.pipeline_result_rx = None;
                 return;
             }
