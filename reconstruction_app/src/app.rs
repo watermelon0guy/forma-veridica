@@ -11,7 +11,7 @@ use crate::ui::render_content;
 
 pub(crate) struct ReconstructionApp {
     pub reconstruction_config: ReconstructionConfig,
-    pub calibration_data: Option<RigExtrinsicsExport>,
+    pub calibration_data: Option<Arc<RigExtrinsicsExport>>,
     pub state: PipelineState,
     pub pipeline_thread: Option<std::thread::JoinHandle<()>>,
     pub pipeline_result_rx: Option<mpsc::Receiver<Result<(), String>>>,
@@ -98,7 +98,7 @@ impl ReconstructionApp {
 
         let config = self.reconstruction_config.clone();
         let calib = match &self.calibration_data {
-            Some(c) => c.clone(),
+            Some(c) => Arc::clone(c),
             None => {
                 self.pipeline_result = Some(Err("Нет данных калибровки".into()));
                 self.pipeline_result_rx = None;

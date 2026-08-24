@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use eframe::egui::{Button, CentralPanel, RichText, Ui};
 use lib_cv::calibration::load_calibration_from_yaml;
 use log::error;
@@ -12,7 +14,7 @@ fn pick_camera_parameters_file(
         .pick_file()
     {
         match load_calibration_from_yaml(&file_path) {
-            Ok(data) => app.calibration_data = Some(data),
+            Ok(data) => app.calibration_data = Some(Arc::new(data)),
             Err(e) => {
                 error!("Не вышло загрузить данные калибровки: {e}");
                 return Err(e);
