@@ -14,7 +14,12 @@ fn pick_camera_parameters_file(
         .pick_file()
     {
         match load_calibration_from_yaml(&file_path) {
-            Ok(data) => app.calibration_data = Some(Arc::new(data)),
+            Ok(data) => {
+                app.calibration_data = Some(Arc::new(data));
+                // Путь нужен, чтобы конфиг, сохранённый из GUI,
+                // можно было воспроизвести через CLI без ручной правки.
+                app.reconstruction_config.calibration_path = file_path;
+            }
             Err(e) => {
                 error!("Не вышло загрузить данные калибровки: {e}");
                 return Err(e);

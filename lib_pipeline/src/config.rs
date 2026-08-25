@@ -200,6 +200,11 @@ impl ReconstructionConfig {
 
         Ok(())
     }
+    pub fn save_to_yaml(&self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+        let yaml = serde_yml::to_string(self)?;
+        std::fs::write(path, yaml)?;
+        Ok(())
+    }
 
     pub fn load_yaml(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
         let file = std::fs::File::open(path)?;

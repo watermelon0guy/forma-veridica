@@ -13,3 +13,4 @@ eframe = { workspace = true }
 serde = { workspace = true }
 rfd = { workspace = true }
 vision-calibration = { workspace = true }
+clap = { workspace = true }

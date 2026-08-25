@@ -6,6 +6,7 @@ use crate::{
     ui::process_screen::process_screen,
 };
 use eframe::egui::Ui;
+mod advanced_params;
 mod align_videos_screen;
 mod pick_calibration_data;
 mod pick_videos_screen;

@@ -1,9 +1,10 @@
-use eframe::egui::{Align, CentralPanel, Frame, Grid, Image, Layout, ScrollArea, Ui, vec2};
+use eframe::egui::{Align, Button, CentralPanel, Frame, Grid, Image, Layout, ScrollArea, Ui, vec2};
 use lib_cv::video::VideoPlayer;
 use lib_ui::utils::set_color_image_to_texture_handle;
 use log::error;
 
 use crate::app::{PipelineState, ReconstructionApp};
+use crate::ui::advanced_params::advanced_params_window;
 
 const PADDING: f32 = 10.0;
 
@@ -47,13 +48,41 @@ pub fn align_video_screen(app: &mut ReconstructionApp, ui: &mut Ui) {
                         }
                     });
 
+                if ui.button("⚙ Дополнительные параметры").clicked() {
+                    app.advanced_params_open = !app.advanced_params_open;
+                }
+                advanced_params_window(app, ui);
+
+                if ui.button("Сохранить конфигурацию в файл").clicked() {
+                    app.sync_offsets_from_players();
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("yaml", &["yml", "yaml"])
+                        .save_file()
+                    {
+                        let path = path.with_extension("yaml");
+                        if let Err(error) = app.reconstruction_config.save_to_yaml(&path) {
+                            log::error!("Не удалось сохранить конфигурацию: {error}");
+                        }
+                    }
+                }
+
                 ui.add_space(20.0);
-                if ui.button("Готово").clicked() {
-                    app.offsets = app
-                        .video_players
-                        .iter()
-                        .map(|vid| vid.current_time_in_seconds)
-                        .collect();
+                if ui
+                    .button("Выбрать папку для сохранения результата")
+                    .clicked()
+                {
+                    if let Some(path) = rfd::FileDialog::new().pick_folder() {
+                        app.reconstruction_config.output_dir = path;
+                    }
+                }
+                if ui
+                    .add_enabled(
+                        !app.reconstruction_config.output_dir.as_os_str().is_empty(),
+                        Button::new("Готово"),
+                    )
+                    .clicked()
+                {
+                    app.sync_offsets_from_players();
                     app.state = PipelineState::ReadyToProcess;
                 }
             });

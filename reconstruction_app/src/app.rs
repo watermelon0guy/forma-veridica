@@ -17,10 +17,10 @@ pub(crate) struct ReconstructionApp {
     pub pipeline_result_rx: Option<mpsc::Receiver<Result<(), String>>>,
     pub pipeline_result: Option<Result<(), String>>,
     pub reconstruction_progress: Arc<Mutex<ReconstructionProgress>>,
+    pub advanced_params_open: bool,
     // Для экрана выравнивания
     pub video_players: Vec<VideoPlayer>,
     pub video_texture_handles: Vec<TextureHandle>,
-    pub offsets: Vec<f64>,
 }
 
 #[derive(Default)]
@@ -40,8 +40,8 @@ impl Default for ReconstructionApp {
             pipeline_result: None,
             video_players: Vec::new(),
             video_texture_handles: Vec::new(),
-            offsets: Vec::new(),
             reconstruction_progress: Default::default(),
+            advanced_params_open: false,
         }
     }
 }
@@ -129,5 +129,16 @@ impl ReconstructionApp {
         });
 
         self.pipeline_thread = Some(handle);
+    }
+
+    pub(crate) fn sync_offsets_from_players(&mut self) {
+        for (camera, player) in self
+            .reconstruction_config
+            .cameras
+            .iter_mut()
+            .zip(self.video_players.iter())
+        {
+            camera.start_time_in_seconds = player.current_time_in_seconds;
+        }
     }
 }
