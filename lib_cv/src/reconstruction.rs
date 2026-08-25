@@ -127,7 +127,7 @@ pub fn filter_matches_by_epipolar(
         }
     }
 
-    info!(
+    trace!(
         "Эпиполярная фильтрация: {} из {} соответствий прошли порог {:.1} px",
         good_indices.len(),
         num_points,
@@ -173,7 +173,7 @@ pub fn triangulate_points_multiple(
     }
 
     let num_points = points_2d[0].len();
-    debug!("Количество точек для триангуляции: {}", num_points);
+    trace!("Количество точек для триангуляции: {}", num_points);
 
     let projections = build_projection_matrices(camera_params);
 
@@ -181,7 +181,7 @@ pub fn triangulate_points_multiple(
     for (i, cam) in camera_params.cameras.iter().enumerate() {
         let k = cam.k.k_matrix();
         let iso = camera_params.cam_se3_rig[i];
-        debug!(
+        trace!(
             "Камера {i}: fx={:.1} fy={:.1} cx={:.1} cy={:.1} dist=({:.4},{:.4},{:.4},{:.4},{:.4})",
             k[(0, 0)],
             k[(1, 1)],
@@ -218,7 +218,7 @@ pub fn triangulate_points_multiple(
 
     // Статистика по confidence
     let num_bad = result.iter().filter(|p| p.confidence < 0.25).count();
-    info!(
+    trace!(
         "Триангулировано {} точек, из них {} с низкой уверенностью (< 0.25)",
         result.len(),
         num_bad
@@ -436,7 +436,7 @@ pub fn min_visible_match_set(
         })
         .collect();
 
-    info!(
+    debug!(
         "Точек, видимых во всех камерах: {} из {}",
         common_ref_indices.len(),
         ref_num_keypoints
@@ -620,7 +620,7 @@ pub fn track_points_optical_flow_all(
             .iter()
             .filter(|p| p.x >= 0.0 && p.y >= 0.0 && p.x < w as f64 && p.y < h as f64)
             .count();
-        debug!(
+        trace!(
             "Камера {cam_i}: отслежено {}/{} точек в границах кадра",
             in_bounds,
             new_points.len()
@@ -653,7 +653,7 @@ pub fn match_with_epipolar_constraint(
 
     for (i, img) in images.iter().enumerate() {
         let (kp, desc) = sift.detect_and_compute(img);
-        info!("Camera {i}: {} keypoints", kp.len());
+        debug!("Camera {i}: {} keypoints", kp.len());
         all_keypoints.push(kp);
         all_descriptors.push(desc);
     }
@@ -730,7 +730,7 @@ pub fn match_with_epipolar_constraint(
             }
         }
 
-        info!(
+        debug!(
             "Camera 0 to camera {cam_i}: {} epipolar matches (out of {})",
             cam_matches.len(),
             cam_descriptors.len()
