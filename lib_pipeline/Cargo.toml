@@ -1,0 +1,13 @@
+[package]
+name = "lib_pipeline"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+image = { workspace = true }
+log = { workspace = true }
+lib_cv = { path = "../lib_cv" }
+vision-calibration = { workspace = true }
+calib-targets = { workspace = true }
+serde_yml = { workspace = true }
+serde = { workspace = true }

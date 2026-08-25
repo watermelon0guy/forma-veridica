@@ -5,9 +5,12 @@ edition = "2024"
 
 [dependencies]
 lib_cv = { path = "../lib_cv" }
-opencv = { workspace = true }
+lib_ui = { path = "../lib_ui" }
+lib_pipeline = { path = "../lib_pipeline" }
 log = { workspace = true }
 env_logger = { workspace = true }
 eframe = { workspace = true }
 serde = { workspace = true }
 rfd = { workspace = true }
+vision-calibration = { workspace = true }
+clap = { workspace = true }

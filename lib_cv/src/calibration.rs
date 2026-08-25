@@ -1,642 +1,490 @@
-use std::collections::HashSet;
-use std::fs;
 use std::path::Path;
 
-use log::{debug, error, info};
-use opencv::calib3d::{calibrate_camera, stereo_calibrate};
-use opencv::core::{
-    FileStorage, FileStorage_Mode, NORM_L2, Point2f, TermCriteria, TermCriteria_Type, Vector, norm,
+use calib_targets::{
+    Coord,
+    aruco::MarkerDetection,
+    charuco::{CharucoBoard, CharucoCorner, CharucoDetectionResult, CharucoParams},
+    core::GridAlignment,
+    detect::detect_charuco_best,
 };
-use opencv::imgcodecs::{IMREAD_COLOR, imread};
-use opencv::objdetect::{CharucoBoard, CharucoDetector};
-use opencv::prelude::*;
-use opencv::{self, Error};
+use image::GrayImage;
+use log::{debug, info, trace, warn};
+use nalgebra::{Point2, Point3};
+use vision_calibration::{
+    core::{
+        BrownConrady5, CorrespondenceView, FxFyCxCySkew, NoMeta, PlanarDataset, RigView,
+        RigViewObs, View,
+    },
+    planar_intrinsics::{self, FilterOptions, PlanarIntrinsicsExport},
+    prelude::PlanarIntrinsicsProblem,
+    rig_extrinsics::{
+        self, RigExtrinsicsExport, RigExtrinsicsInput, RigExtrinsicsProblem,
+        RigIntrinsicsManualInit, run_calibration, step_intrinsics_init_all_with_seed,
+        step_intrinsics_optimize_all, step_rig_init, step_rig_optimize,
+    },
+    session::CalibrationSession,
+};
 
-pub fn get_charuco(
+use crate::calibration::charuco::{
+    build_marker_homographies, detect_aruco_markers, filter_bad_charuco_corners,
+    interpolate_charuco_corners, refine_charuco_corners,
+};
+
+pub mod charuco;
+pub mod params;
+
+pub use params::{DatasetParams, DetectionParams, SolverParams};
+
+pub fn get_charuco_grid_first(
     charuco_board: &CharucoBoard,
-    img: &Mat,
-) -> Result<
-    (
-        Vector<Vector<Point2f>>,
-        Vector<i32>,
-        Vector<Point2f>,
-        Vector<i32>,
-        Mat,
-        Mat,
-    ),
-    Error,
-> {
-    let charuco_detector = CharucoDetector::new_def(charuco_board)?;
-    let mut charuco_corners: Vector<Point2f> = Vector::new();
-    let mut charuco_ids: Vector<i32> = Vector::new();
-    let mut marker_corners: Vector<Vector<Point2f>> = Vector::new();
-    let mut marker_ids: Vector<i32> = Vector::new();
-    charuco_detector.detect_board(
-        &img,
-        &mut charuco_corners,
-        &mut charuco_ids,
-        &mut marker_corners,
-        &mut marker_ids,
-    )?;
-
-    let mut obj_points: Mat = Mat::default();
-    let mut img_points: Mat = Mat::default();
-    let _ = charuco_board.match_image_points(
-        &charuco_corners,
-        &charuco_ids,
-        &mut obj_points,
-        &mut img_points,
-    );
-
-    Ok((
-        marker_corners,
-        marker_ids,
-        charuco_corners,
-        charuco_ids,
-        obj_points,
-        img_points,
-    ))
-}
-
-pub fn calibrate_with_charuco(
-    imgs: &Vector<Mat>,
-    charuco_board: &CharucoBoard,
-) -> Result<
-    (
-        f64,
-        Mat,
-        Mat,
-        Vector<Mat>,
-        Vector<Mat>,
-        Vector<Mat>,
-        Vector<Mat>,
-        Vector<Vector<i32>>,
-        Vector<Vector<Point2f>>,
-    ),
-    Error,
-> {
-    let charuco_detector = CharucoDetector::new_def(charuco_board)?;
-
-    let mut all_charuco_corners = Vector::<Vector<Point2f>>::new();
-    let mut all_charuco_ids = Vector::<Vector<i32>>::new();
-    let mut all_object_points = Vector::<Mat>::new();
-    let mut all_image_points = Vector::<Mat>::new();
-
-    let img_size = imgs.get(0)?.size()?;
-
-    for img in imgs {
-        let mut charuco_corners: Vector<Point2f> = Vector::new();
-        let mut charuco_ids: Vector<i32> = Vector::new();
-        charuco_detector.detect_board_def(&img, &mut charuco_corners, &mut charuco_ids)?;
-        if charuco_corners.is_empty() {
-            continue;
-        }
-
-        let mut obj_points = Mat::default();
-        let mut img_points = Mat::default();
-
-        charuco_board.match_image_points(
-            &charuco_corners,
-            &charuco_ids,
-            &mut obj_points,
-            &mut img_points,
-        )?;
-
-        if obj_points.empty() || img_points.empty() {
-            continue;
-        }
-        all_charuco_corners.push(charuco_corners);
-        all_charuco_ids.push(charuco_ids);
-        all_object_points.push(obj_points);
-        all_image_points.push(img_points);
-    }
-
-    let mut camera_matrix = Mat::default();
-    let mut dist_coeffs = Mat::default();
-    let mut r_vecs = Vector::<Mat>::new();
-    let mut t_vecs = Vector::<Mat>::new();
-
-    let criteria = TermCriteria::new(
-        opencv::core::TermCriteria_COUNT + opencv::core::TermCriteria_EPS,
-        30,
-        f64::EPSILON,
-    )?;
-
-    let ret = calibrate_camera(
-        &all_object_points,
-        &all_image_points,
-        img_size,
-        &mut camera_matrix,
-        &mut dist_coeffs,
-        &mut r_vecs,
-        &mut t_vecs,
-        0,
-        criteria,
-    )?;
-
-    Ok((
-        ret,
-        camera_matrix,
-        dist_coeffs,
-        r_vecs,
-        t_vecs,
-        all_object_points,
-        all_image_points,
-        all_charuco_ids,
-        all_charuco_corners,
-    ))
-}
-
-pub fn calibrate_multiple_with_charuco(
-    imgs: &Vec<Vector<Mat>>,
-    charuco_board: &CharucoBoard,
-) -> Result<Vec<CameraParameters>, opencv::Error> {
-    debug!("Начало калибровки камер");
-    debug!("Параметры доски ChArUco: {:?}", charuco_board);
-    let mut ret: Vec<f64> = Vec::default();
-    let mut camera_matrix: Vec<Mat> = Vec::default();
-    let mut dist_coeffs: Vec<Mat> = Vec::default();
-    let mut r_vecs: Vec<Vector<Mat>> = Vec::default();
-    let mut t_vecs: Vec<Vector<Mat>> = Vec::default();
-    let mut object_points: Vec<Vector<Mat>> = Vec::default();
-    let mut image_points: Vec<Vector<Mat>> = Vec::default();
-    let mut charuco_ids: Vec<Vector<Vector<i32>>> = Vec::default();
-    let mut charuco_corners: Vec<Vector<Vector<Point2f>>> = Vec::default();
-
-    if imgs.len() < 2 {
-        error!("Ошибка: для калибровки требуется как минимум 2 набора изображений");
-        return Ok(vec![]);
-    }
-
-    debug!(
-        "Количество наборов изображений для калибровки: {}",
-        imgs.len()
-    );
-
-    for img_set in imgs {
-        match calibrate_with_charuco(img_set, charuco_board) {
-            Ok((
-                curr_cam_ret_val,
-                curr_cam_camera_matrix_val,
-                curr_cam_dist_coeffs_val,
-                curr_cam_r_vecs_val,
-                curr_cam_t_vecs_val,
-                curr_cam_all_object_points_val,
-                curr_cam_all_image_points_val,
-                curr_cam_all_charuco_ids,
-                curr_cam_charuco_corners,
-            )) => {
-                debug!("Ошибка обычной калибровки {}", curr_cam_ret_val);
-                ret.push(curr_cam_ret_val);
-                camera_matrix.push(curr_cam_camera_matrix_val);
-                dist_coeffs.push(curr_cam_dist_coeffs_val);
-                r_vecs.push(curr_cam_r_vecs_val);
-                t_vecs.push(curr_cam_t_vecs_val);
-                object_points.push(curr_cam_all_object_points_val);
-                image_points.push(curr_cam_all_image_points_val);
-                charuco_ids.push(curr_cam_all_charuco_ids);
-                charuco_corners.push(curr_cam_charuco_corners);
-            }
-            Err(e) => error!("Ошибка калибровки calibrate_with_charuco: {:?}", e),
-        }
-    }
-
-    let camera_count = camera_matrix.len();
-
-    let criteria = TermCriteria::new(
-        TermCriteria_Type::COUNT as i32 | TermCriteria_Type::EPS as i32,
-        50,
-        1e-6,
-    )
-    .unwrap();
-
-    let mut cameras = Vec::with_capacity(camera_count);
-
-    // Параметры для первой камеры (основной). Вообще можно сделать выбор основной камеры кастомизируемый.
-    cameras.push(CameraParameters {
-        intrinsic: camera_matrix[0].clone(),
-        distortion: dist_coeffs[0].clone(),
-        ..CameraParameters::new().unwrap()
-    });
-
-    for i in 1..camera_count {
-        let mut common_object_points = Vector::<Mat>::new();
-        let mut common_image_points1 = Vector::<Mat>::new();
-        let mut common_image_points2 = Vector::<Mat>::new();
-
-        for frame_idx in 0..charuco_ids[0].len() {
-            let ids_cam1 = &charuco_ids[0].get(frame_idx)?;
-            let ids_cam2 = &charuco_ids[i].get(frame_idx)?;
-            debug!("Содержимое ids_cam1: {:?}", ids_cam1);
-            debug!("Содержимое ids_cam2: {:?}", ids_cam2);
-
-            let common: HashSet<i32> = find_common_points(&[ids_cam1.clone(), ids_cam2.clone()]);
-            debug!("Содержимое common: {:?}", common);
-            debug!(
-                "Камера 0 и камера {}: найдено {} общих точек",
-                i,
-                common.len()
+    img: &GrayImage,
+) -> Option<CharucoDetectionResult> {
+    let board_spec = charuco_board.spec();
+    let params_sweep = CharucoParams::sweep_for_board(&board_spec);
+    match detect_charuco_best(img, &params_sweep) {
+        Ok(result) => {
+            trace!(
+                "get_charuco_grid_first: {} corners, {} markers",
+                result.corners.len(),
+                result.markers.len()
             );
-            if common.len() < 10 {
-                debug!(
-                    "ВНИМАНИЕ: недостаточно общих точек между камерой 0 и камерой {}",
-                    i
-                );
-                continue;
-            }
-
-            let mut idx_cam1 = Vector::<i32>::new();
-            let mut idx_cam2 = Vector::<i32>::new();
-
-            for (pos, id) in ids_cam1.iter().enumerate() {
-                if common.contains(&id) {
-                    idx_cam1.push(pos as i32);
-                }
-            }
-            for (pos, id) in ids_cam2.iter().enumerate() {
-                if common.contains(&id) {
-                    idx_cam2.push(pos as i32);
-                }
-            }
-
-            debug!("Содержимое idx_cam1: {:?}", idx_cam1);
-            debug!("Содержимое idx_cam2: {:?}", idx_cam2);
-
-            let obj_points = select_rows(&object_points[0].get(frame_idx)?, &idx_cam1)?;
-            let img_points1 = select_rows(&image_points[0].get(frame_idx)?, &idx_cam1)?;
-            let img_points2 = select_rows(&image_points[i].get(frame_idx)?, &idx_cam2)?;
-
-            debug!(
-                "Кадр {}, Камера 0 и {}: выбрано {} 3D точек, {} точек на изображении 1, {} точек на изображении 2",
-                frame_idx,
-                i,
-                obj_points.rows(),
-                img_points1.rows(),
-                img_points2.rows()
-            );
-
-            common_object_points.push(obj_points);
-            common_image_points1.push(img_points1);
-            common_image_points2.push(img_points2);
+            Some(result)
         }
-
-        let img_size = imgs[0].get(0)?.size()?;
-
-        debug!("Подготовка 1 камеры к стереокалибровке");
-        debug!(
-            "Количество кадров с общими точками: {}",
-            common_object_points.len()
-        );
-
-        // Надо временно поделить на несколько частей, так как иначе получим множественное заимствование.
-        let mut cam_1_matrix = camera_matrix[0].clone();
-        let mut cam_1_dist = dist_coeffs[0].clone();
-        let mut cam_2_matrix = camera_matrix[i].clone();
-        let mut cam_2_dist = dist_coeffs[i].clone();
-
-        debug!("Матрица камеры 0 до стерео калибровки:\n{:?}", cam_1_matrix);
-        debug!("Дисторсия камеры 0 до стерео калибровки:\n{:?}", cam_1_dist);
-        debug!(
-            "Матрица камеры {} до стерео калибровки:\n{:?}",
-            i, cam_2_matrix
-        );
-        debug!(
-            "Дисторсия камеры {} до стерео калибровки:\n{:?}",
-            i, cam_2_dist
-        );
-
-        let mut r = Mat::default();
-        let mut t = Mat::default();
-        let mut e = Mat::default();
-        let mut f = Mat::default();
-
-        debug!("Выполнение stereo_calibrate...");
-        let stereo_error = stereo_calibrate(
-            &common_object_points,
-            &common_image_points1,
-            &common_image_points2,
-            &mut cam_1_matrix,
-            &mut cam_1_dist,
-            &mut cam_2_matrix,
-            &mut cam_2_dist,
-            img_size,
-            &mut r,
-            &mut t,
-            &mut e,
-            &mut f,
-            opencv::calib3d::CALIB_FIX_INTRINSIC,
-            criteria,
-        )?;
-
-        debug!(
-            "Ошибка стерео калибровки для камеры {}: {}",
-            i, stereo_error
-        );
-        debug!(
-            "Матрица камеры 0 после стерео калибровки:\n{:?}",
-            cam_1_matrix
-        );
-        debug!(
-            "Дисторсия камеры 0 после стерео калибровки:\n{:?}",
-            cam_1_dist
-        );
-        debug!(
-            "Матрица камеры {} после стерео калибровки:\n{:?}",
-            i, cam_2_matrix
-        );
-        debug!(
-            "Дисторсия камеры {} после стерео калибровки:\n{:?}",
-            i, cam_2_dist
-        );
-        debug!("Матрица вращения:\n{:#?}", r);
-        debug!("Вектор трансляции:\n{:#?}", t);
-
-        // Вычисляем норму вектора трансляции для получения расстояния
-        let t_norm = norm(&t, opencv::core::NORM_L2, &Mat::default())?;
-        debug!("Расстояние между камерой 0 и камерой {}: {} мм", i, t_norm);
-
-        // Удаляем обновление матриц камеры
-        // camera_matrix[0] = cam_1_matrix;
-        // dist_coeffs[0] = cam_1_dist;
-        // camera_matrix[i] = cam_2_matrix;
-        // dist_coeffs[i] = cam_2_dist;
-
-        cameras.push(CameraParameters {
-            intrinsic: camera_matrix[i].clone(),
-            distortion: dist_coeffs[i].clone(),
-            rotation: r,
-            translation: t,
-            essential_matrix: e,
-            fundamental_matrix: f,
-        });
-
-        debug!("=== Калибровка камеры {} завершена ===", i);
-    }
-    debug!("=== Калибровка множества камер завершена ===");
-
-    // Анализируем расстояния между камерами
-    let _ = calculate_adjacent_camera_distances(&cameras);
-    debug!("Проверка {:#?}", cameras[1]);
-    Ok(cameras)
-}
-
-fn select_rows(src: &Mat, indices: &Vector<i32>) -> opencv::Result<Mat> {
-    // имя/тип исходной матрицы
-    let cols = src.cols();
-    let typ = src.typ();
-
-    // создаём пустой мат той же глубины/каналов
-    let mut dst = Mat::zeros(indices.len() as i32, cols, typ)?.to_mat()?; // zeros вернёт MatExpr
-
-    for (dst_r, src_r) in indices.iter().enumerate() {
-        let src_row = src.row(src_r)?; // 1×C view
-        let mut dst_row = dst.row_mut(dst_r as i32)?; // 1×C view (mutable)
-        src_row.copy_to(&mut dst_row)?; // memcpy-эквивалент
-    }
-    Ok(dst)
-}
-
-/// Вычисляет расстояния между соседними камерами и возвращает их в виде вектора
-pub fn calculate_adjacent_camera_distances(
-    cameras: &[CameraParameters],
-) -> Result<Vec<f64>, opencv::Error> {
-    debug!("\n=== Анализ расстояний между соседними камерами ===");
-
-    if cameras.len() < 2 {
-        debug!("Недостаточно камер для анализа расстояний");
-        return Ok(Vec::new());
-    }
-
-    let mut distances = Vec::with_capacity(cameras.len() - 1);
-
-    for i in 1..cameras.len() {
-        let t = &cameras[i].translation;
-        let t_norm = norm(t, opencv::core::NORM_L2, &Mat::default())?;
-
-        // Получаем компоненты вектора трансляции
-        let tx = t.at_2d::<f64>(0, 0)?;
-        let ty = t.at_2d::<f64>(1, 0)?;
-        let tz = t.at_2d::<f64>(2, 0)?;
-
-        debug!("Камера {} → Камера 0:", i);
-        debug!("  Полное расстояние: {:.2} мм", t_norm);
-        debug!(
-            "  Компоненты вектора: X={:.2} мм, Y={:.2} мм, Z={:.2} мм",
-            tx, ty, tz
-        );
-
-        // Если это не первая камера (т.е. i > 1), также вычисляем относительное расстояние
-        // от предыдущей камеры
-        if i > 1 {
-            let prev_t = &cameras[i - 1].translation;
-            let prev_tx = prev_t.at_2d::<f64>(0, 0)?;
-            let prev_ty = prev_t.at_2d::<f64>(1, 0)?;
-            let prev_tz = prev_t.at_2d::<f64>(2, 0)?;
-
-            let rel_tx = tx - prev_tx;
-            let rel_ty = ty - prev_ty;
-            let rel_tz = tz - prev_tz;
-            let rel_t_norm = (rel_tx * rel_tx + rel_ty * rel_ty + rel_tz * rel_tz).sqrt();
-
-            debug!("  Относительно камеры {}:", i - 1);
-            debug!("    Относительное расстояние: {:.2} мм", rel_t_norm);
-            debug!(
-                "    Относительные компоненты: X={:.2} мм, Y={:.2} мм, Z={:.2} мм",
-                rel_tx, rel_ty, rel_tz
-            );
-        }
-
-        distances.push(t_norm);
-    }
-
-    debug!("=== Конец анализа расстояний ===\n");
-    Ok(distances)
-}
-
-#[derive(Debug)]
-pub struct CameraParameters {
-    pub intrinsic: Mat,
-    pub distortion: Mat,
-    pub rotation: Mat,
-    pub translation: Mat,
-    pub essential_matrix: Mat,
-    pub fundamental_matrix: Mat,
-}
-
-impl CameraParameters {
-    pub fn new() -> opencv::Result<Self> {
-        Ok(Self {
-            intrinsic: Mat::default(),
-            distortion: Mat::default(),
-            rotation: Mat::eye(3, 3, opencv::core::CV_64F)?.to_mat()?,
-            translation: Mat::zeros(3, 1, opencv::core::CV_64F)?.to_mat()?,
-            essential_matrix: Mat::default(),
-            fundamental_matrix: Mat::default(),
-        })
-    }
-}
-
-#[derive(Debug)]
-pub struct CalibrationFrame {
-    pub object_points: Mat,       // CV_32FC3 (3D точки)
-    pub image_points: Mat,        // CV_32FC2 (2D точки изображения)
-    pub charuco_ids: Vector<i32>, // ID точек
-}
-
-// Функция для нахождения общих точек
-pub fn find_common_points(frames: &[Vector<i32>]) -> HashSet<i32> {
-    if frames.is_empty() {
-        return HashSet::new();
-    }
-
-    // Первый набор - копируем значения
-    let mut common_ids: HashSet<i32> = frames.get(0).unwrap().iter().collect();
-
-    for frame in frames.iter().skip(1) {
-        // Временный HashSet для сравнения
-        let current_ids: HashSet<_> = frame.iter().collect();
-        common_ids = common_ids.intersection(&current_ids).cloned().collect();
-    }
-
-    common_ids
-}
-
-pub fn perform_calibration(
-    image_path: &str,
-    cameras_params_path: &Path,
-    charuco_board: &CharucoBoard,
-    num_cameras: usize,
-) {
-    debug!("Поиск калибровочных изображений в: {}", image_path);
-
-    // Собираем все файлы в директории
-    let dir_entries = match fs::read_dir(image_path) {
-        Ok(entries) => entries,
         Err(e) => {
-            error!("Ошибка чтения директории: {}", e);
-            return;
+            debug!("get_charuco_grid_first: detection error — {e}");
+            None
+        }
+    }
+}
+
+pub fn get_charuco_marker_first(
+    charuco_board: &CharucoBoard,
+    img: &GrayImage,
+    detection: &DetectionParams,
+) -> Option<CharucoDetectionResult> {
+    let markers = detect_aruco_markers(img, &charuco_board.spec().dictionary, detection);
+
+    let transforms = build_marker_homographies(&charuco_board, &markers);
+    if transforms.is_empty() {
+        return None;
+    }
+    let corners =
+        interpolate_charuco_corners(charuco_board, &transforms, detection.min_markers_per_corner);
+    let mut corners = refine_charuco_corners(charuco_board, corners, &markers, img, detection);
+    filter_bad_charuco_corners(charuco_board, &mut corners, &markers);
+    if corners.is_empty() {
+        None
+    } else {
+        Some(convert_to_charuco_result(charuco_board, &corners, markers))
+    }
+}
+
+fn convert_to_charuco_result(
+    board: &CharucoBoard,
+    corners: &[(usize, Point2<f32>)],
+    markers: Vec<MarkerDetection>,
+) -> CharucoDetectionResult {
+    // Строим обратный маппинг corner_id -> Coord
+    // charuco_corner_id_from_board_corner(col, row): 1-based, col ∈ 1..cols, row ∈ 1..rows
+    let mut id_to_grid: std::collections::HashMap<u32, Coord> = std::collections::HashMap::new();
+    for row in 1..=board.expected_inner_rows() as i32 {
+        for col in 1..=board.expected_inner_cols() as i32 {
+            if let Some(cid) = board.charuco_corner_id_from_board_corner(col, row) {
+                id_to_grid.insert(cid, Coord::new(col, row));
+            }
+        }
+    }
+
+    let charuco_corners: Vec<CharucoCorner> = corners
+        .iter()
+        .filter_map(|(corner_id, pixel_pos)| {
+            let corner_id = *corner_id as u32;
+            let target_position = board.charuco_object_xy(corner_id)?;
+            let grid = id_to_grid.get(&corner_id)?;
+            Some(CharucoCorner::new(
+                *pixel_pos,
+                *grid,
+                corner_id,
+                target_position,
+                1.0, // score
+            ))
+        })
+        .collect();
+
+    CharucoDetectionResult::new(charuco_corners, markers, GridAlignment::IDENTITY)
+}
+
+pub fn calibrate_camera(
+    correspondence_views: Vec<CorrespondenceView>,
+    solver: &SolverParams,
+) -> Result<PlanarIntrinsicsExport, Box<dyn std::error::Error>> {
+    debug!("Калибровка камеры: {} кадров", correspondence_views.len());
+    let mut session = CalibrationSession::<PlanarIntrinsicsProblem>::new();
+    let views = corr_views_to_view_no_meta(correspondence_views);
+    let dataset = PlanarDataset::new(views)?;
+    session.set_input(dataset)?;
+
+    let mut filter_option = FilterOptions::default();
+    filter_option.max_reproj_error = solver.max_reproj_error;
+    filter_option.min_points_per_view = solver.min_points_per_view;
+    filter_option.remove_sparse_views = solver.remove_sparse_views;
+    planar_intrinsics::run_calibration_with_filtering(&mut session, filter_option)?;
+
+    let intrinsics = session.export()?;
+
+    Ok(intrinsics)
+}
+
+pub fn correspondence_view_from_charuco(
+    charuco_board: &CharucoBoard,
+    img: &image::ImageBuffer<image::Luma<u8>, Vec<u8>>,
+    detection: &DetectionParams,
+) -> Option<CorrespondenceView> {
+    let charuco_detection = match get_charuco_marker_first(charuco_board, img, detection) {
+        Some(charuco_det) => charuco_det,
+        None => {
+            return None;
         }
     };
+    if charuco_detection.corners.is_empty() {
+        return None;
+    }
+    let mut points_3d: Vec<Point3<f64>> = Vec::new();
+    let mut points_2d: Vec<Point2<f64>> = Vec::new();
+    for corner in &charuco_detection.corners {
+        let target_position = corner.target_position;
+        points_3d.push(Point3::new(
+            target_position.x as f64,
+            target_position.y as f64,
+            0.0,
+        ));
+        points_2d.push(Point2::new(
+            corner.position.x as f64,
+            corner.position.y as f64,
+        ));
+    }
+    debug!("ChArUco: {} углов найдено", points_3d.len());
+    match CorrespondenceView::new(points_3d, points_2d) {
+        Ok(view) => Some(view),
+        Err(e) => {
+            warn!("Ошибка CorrespondenceView: {e}");
+            None
+        }
+    }
+}
 
-    // Группируем изображения по камерам и кадрам
-    let mut frame_numbers = Vec::new();
-    let mut camera_images: Vec<Vector<Mat>> = vec![Vector::<Mat>::new(); num_cameras];
+pub fn corr_views_to_view_no_meta(corr_views: Vec<CorrespondenceView>) -> Vec<View<NoMeta>> {
+    corr_views
+        .into_iter()
+        .map(|corr_view| View {
+            obs: corr_view,
+            meta: NoMeta,
+        })
+        .collect()
+}
 
-    for entry in dir_entries {
-        let entry = match entry {
-            Ok(e) => e,
-            Err(_) => continue,
+pub fn calibrate_multiple_with_charuco_from_images(
+    imgs_sets: &[Vec<GrayImage>],
+    charuco_board: &CharucoBoard,
+    detection: &DetectionParams,
+) -> Result<RigExtrinsicsExport, Box<dyn std::error::Error>> {
+    debug!("Start multiple cameras calibration");
+    let num_cameras = imgs_sets.len();
+    debug!(
+        "Количество наборов изображений для калибровки: {}.",
+        imgs_sets.len()
+    );
+    if imgs_sets.len() < 2 {
+        return Err(
+            "Недостаточно камер: для калибровки требуется как минимум 2 набора изображений".into(),
+        );
+    }
+
+    let num_frames = imgs_sets[0].len();
+
+    let mut rigs = Vec::new();
+
+    for set_num in 0..num_frames {
+        let mut correspondences = Vec::new();
+        for cam_idx in 0..num_cameras {
+            correspondences.push(correspondence_view_from_charuco(
+                charuco_board,
+                &imgs_sets[cam_idx][set_num],
+                detection,
+            ));
+        }
+
+        let rig_view = RigView {
+            obs: RigViewObs {
+                cameras: correspondences,
+            },
+            meta: NoMeta,
         };
 
-        let file_name = entry.file_name();
-        let file_name = file_name.to_string_lossy();
-        debug!("Загружаю {}", file_name);
-
-        if file_name.starts_with("img_") && file_name.ends_with(".png") {
-            let parts: Vec<&str> = file_name.split('_').collect();
-            if parts.len() == 3 {
-                if let Ok(cam_num) = parts[1].parse::<usize>() {
-                    if let Ok(frame_num) = parts[2].trim_end_matches(".png").parse::<usize>() {
-                        if let Ok(img) = imread(&entry.path().to_string_lossy(), IMREAD_COLOR) {
-                            camera_images[cam_num - 1].push(img);
-                            frame_numbers.push(frame_num);
-                        }
-                    }
-                }
-            }
-        }
+        rigs.push(rig_view);
     }
 
-    // Удаляем дубликаты frame_numbers и сортируем
-    frame_numbers.sort();
-    frame_numbers.dedup();
+    let rig_dataset = RigExtrinsicsInput::new(rigs, num_cameras)?;
 
-    info!("Найдено {} наборов(сцен) изображений", frame_numbers.len());
+    let mut session = CalibrationSession::<RigExtrinsicsProblem>::new();
+    session.set_input(rig_dataset)?;
+    run_calibration(&mut session)?;
+    let result = session.export()?;
 
-    // Выполняем калибровку
-    match calibrate_multiple_with_charuco(&camera_images, charuco_board) {
-        Ok(cameras) => {
-            info!(
-                "Калибровка успешно завершена. Получено {} камер:",
-                cameras.len()
-            );
-            for (i, cam) in cameras.iter().enumerate() {
-                if i > 0 {
-                    debug!(
-                        "Дистанция от основной камеры: {:.2} мм",
-                        norm(&cam.translation, NORM_L2, &Mat::default()).unwrap()
-                    );
-                }
-            }
-
-            // Сохранение параметров в файл (опционально)
-            if let Err(e) = save_camera_parameters(
-                &cameras,
-                &format!(
-                    "{}/calibration_params.yml",
-                    cameras_params_path.to_str().unwrap()
-                ),
-            ) {
-                error!("Ошибка при сохранении параметров: {}", e);
-            }
-        }
-        Err(e) => error!("Ошибка при калибровке: {:?}", e),
-    }
+    Ok(result)
 }
 
-fn save_camera_parameters(cameras: &[CameraParameters], path: &str) -> opencv::Result<()> {
-    let mut fs = FileStorage::new(path, FileStorage_Mode::WRITE as i32, "")?;
-
-    for (i, cam) in cameras.iter().enumerate() {
-        // Для матриц используем специальные методы записи
-        fs.write_mat(&format!("camera_{}_intrinsic", i), &cam.intrinsic)?;
-        fs.write_mat(&format!("camera_{}_distortion", i), &cam.distortion)?;
-
-        if i > 0 {
-            fs.write_mat(&format!("camera_{}_rotation", i), &cam.rotation)?;
-            fs.write_mat(&format!("camera_{}_translation", i), &cam.translation)?;
-        }
-    }
-
-    fs.release()?;
-    Ok(())
-}
-
-pub fn load_camera_parameters(path: &str) -> opencv::Result<Vec<CameraParameters>> {
-    let mut fs = FileStorage::new(path, FileStorage_Mode::READ as i32, "")?;
-
-    let mut cameras = Vec::new();
-    let mut i = 0;
-
-    loop {
-        let intrinsic_name = format!("camera_{}_intrinsic", i);
-        debug!("Попытка считать данные для камеры {}", i);
-        if fs.get_node(&intrinsic_name)?.empty()? {
-            break;
-        }
-
-        let mut cam_params = CameraParameters::new()?;
-
-        cam_params.intrinsic = fs.get_node(&intrinsic_name)?.mat()?;
-        cam_params.distortion = fs.get_node(&format!("camera_{}_distortion", i))?.mat()?;
-
-        if i > 0 {
-            cam_params.rotation = fs.get_node(&format!("camera_{}_rotation", i))?.mat()?;
-            cam_params.translation = fs.get_node(&format!("camera_{}_translation", i))?.mat()?;
-        }
-
-        cameras.push(cam_params);
-        i += 1;
-    }
-
-    fs.release()?;
-
-    if cameras.is_empty() {
-        return Err(opencv::Error::new(
-            opencv::core::StsError as i32,
-            "Не удалось загрузить параметры ни одной камеры".to_string(),
+pub fn update_rigs(
+    rigs: &mut Vec<RigView<NoMeta>>,
+    cams_imgs: &[GrayImage],
+    charuco_board: &CharucoBoard,
+    detection: &DetectionParams,
+    dataset: &DatasetParams,
+) {
+    let mut correspondences = Vec::new();
+    let num_cameras = cams_imgs.len();
+    for cam_idx in 0..num_cameras {
+        correspondences.push(correspondence_view_from_charuco(
+            charuco_board,
+            &cams_imgs[cam_idx],
+            detection,
         ));
     }
 
-    Ok(cameras)
+    for opt_cv in &correspondences {
+        if let Some(cv) = opt_cv {
+            if cv.len() < dataset.min_corners_per_view {
+                return;
+            }
+        }
+    }
+
+    // Добавляем риг только если есть валидные детекции минимум с
+    // `min_cameras_per_frame` камер
+    let valid_cams = correspondences.iter().filter(|c| c.is_some()).count();
+    if valid_cams >= dataset.min_cameras_per_frame {
+        let rig_view = RigView {
+            obs: RigViewObs {
+                cameras: correspondences,
+            },
+            meta: NoMeta,
+        };
+        rigs.push(rig_view);
+    }
+}
+
+pub fn update_correspondes_views(
+    correspondence_views: &mut Vec<Vec<Option<CorrespondenceView>>>,
+    cams_imgs: &[GrayImage],
+    charuco_board: &CharucoBoard,
+    detection: &DetectionParams,
+    dataset: &DatasetParams,
+) {
+    let mut correspondences = Vec::new();
+    let num_cameras = cams_imgs.len();
+    for cam_idx in 0..num_cameras {
+        let correspondence =
+            correspondence_view_from_charuco(charuco_board, &cams_imgs[cam_idx], detection)
+                .filter(|c| c.points_2d.len() >= dataset.min_corners_per_view);
+        correspondences.push(correspondence);
+    }
+
+    correspondence_views.push(correspondences);
+}
+
+pub fn calibrate_multiple(
+    rigs: Vec<RigView<NoMeta>>,
+) -> Result<RigExtrinsicsExport, Box<dyn std::error::Error>> {
+    debug!("Start multiple cameras calibration");
+    let num_cameras = match rigs.get(0) {
+        Some(it) => it,
+        None => return Err("Ошибка получения количества камер из наборов изображений".into()),
+    }
+    .obs
+    .cameras
+    .len();
+
+    let num_frames = rigs.len();
+    debug!("Камер: {num_cameras}, кадров: {num_frames}");
+
+    if num_cameras < 2 {
+        return Err(
+            "Недостаточно камер: для калибровки требуется как минимум 2 набора изображений".into(),
+        );
+    }
+
+    let rig_dataset = RigExtrinsicsInput::new(rigs, num_cameras)?;
+
+    let mut session = CalibrationSession::<RigExtrinsicsProblem>::new();
+    session.set_input(rig_dataset)?;
+    rig_extrinsics::run_calibration(&mut session)?;
+    let result = session.export()?;
+
+    // Диагностика
+    for (i, cam) in result.cameras.iter().enumerate() {
+        let k = cam.k.k_matrix();
+        info!(
+            "Камера {i}: fx={:.1} fy={:.1} cx={:.1} cy={:.1} k1={:.4} k2={:.4}",
+            k[(0, 0)],
+            k[(1, 1)],
+            k[(0, 2)],
+            k[(1, 2)],
+            cam.dist.k1,
+            cam.dist.k2
+        );
+    }
+    info!("mean_reproj_error: {:.2} px", result.mean_reproj_error);
+
+    Ok(result)
+}
+
+pub fn calibrate_multiple_with_inrinsics(
+    rigs: Vec<RigView<NoMeta>>,
+    intrinsics: Vec<PlanarIntrinsicsExport>,
+) -> Result<RigExtrinsicsExport, Box<dyn std::error::Error>> {
+    debug!("Start multiple cameras calibration");
+    let num_cameras = match rigs.get(0) {
+        Some(it) => it,
+        None => return Err("Ошибка получения количества камер из наборов изображений".into()),
+    }
+    .obs
+    .cameras
+    .len();
+
+    let num_frames = rigs.len();
+    debug!("Камер: {num_cameras}, кадров: {num_frames}");
+
+    if num_cameras < 2 {
+        return Err(
+            "Недостаточно камер: для калибровки требуется как минимум 2 набора изображений".into(),
+        );
+    }
+
+    let rig_dataset = RigExtrinsicsInput::new(rigs, num_cameras)?;
+    let k_vec: Vec<FxFyCxCySkew<f64>> = intrinsics
+        .iter()
+        .map(|r| {
+            let vision_calibration::core::IntrinsicsParams::FxFyCxCySkew { params } =
+                r.params.camera.intrinsics.clone();
+            params
+        })
+        .collect();
+    let d_vec: Vec<BrownConrady5<f64>> = intrinsics
+        .iter()
+        .map(|r| {
+            let vision_calibration::core::DistortionParams::BrownConrady5 { params } =
+                r.params.camera.distortion.clone()
+            else {
+                panic!("Expected BrownConrady5 distortion");
+            };
+            params
+        })
+        .collect();
+
+    let mut session = CalibrationSession::<RigExtrinsicsProblem>::new();
+    session.set_input(rig_dataset)?;
+
+    let mut manual = RigIntrinsicsManualInit::default();
+    manual.per_cam_intrinsics = Some(k_vec);
+    manual.per_cam_distortion = Some(d_vec);
+
+    step_intrinsics_init_all_with_seed(&mut session, manual, None)?;
+    step_intrinsics_optimize_all(&mut session, None)?; // опционально
+    step_rig_init(&mut session)?;
+    step_rig_optimize(&mut session, None)?;
+    let result: RigExtrinsicsExport = session.export()?;
+
+    // Диагностика результата — те же ключевые метрики, что и в calibrate_multiple
+    for (i, cam) in result.cameras.iter().enumerate() {
+        let k = cam.k.k_matrix();
+        info!(
+            "Камера {i}: fx={:.1} fy={:.1} cx={:.1} cy={:.1} k1={:.4} k2={:.4}",
+            k[(0, 0)],
+            k[(1, 1)],
+            k[(0, 2)],
+            k[(1, 2)],
+            cam.dist.k1,
+            cam.dist.k2
+        );
+    }
+    info!("mean_reproj_error: {:.2} px", result.mean_reproj_error);
+
+    Ok(result)
+}
+
+/// Сохраняет данные, необходимые для реконструкции, без огромного списка
+/// остатков каждой отдельной точки. Полная диагностика может содержать больше
+/// 65 536 элементов, что превышает лимит последовательности `serde_yml`.
+pub fn save_calibration_to_yaml(
+    path: &Path,
+    calibration: &RigExtrinsicsExport,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut compact = calibration.clone();
+    compact.per_feature_residuals = Default::default();
+    compact.image_manifest = None;
+    let yaml = serde_yml::to_string(&compact)?;
+    std::fs::write(path, yaml)?;
+    Ok(())
+}
+
+pub fn load_calibration_from_yaml(
+    path: &Path,
+) -> Result<RigExtrinsicsExport, Box<dyn std::error::Error>> {
+    let yaml = std::fs::read_to_string(path)?;
+    // Старые файлы могли быть сохранены с десятками тысяч подробных
+    // per-feature residuals. Они не нужны реконструкции и не помещаются в
+    // жёсткий лимит YAML-парсера, поэтому удаляем блок до десериализации.
+    let compact_yaml = remove_top_level_yaml_field(&yaml, "per_feature_residuals");
+    let export: RigExtrinsicsExport = serde_yml::from_str(&compact_yaml)?;
+    Ok(export)
+}
+
+fn remove_top_level_yaml_field(yaml: &str, field: &str) -> String {
+    let key = format!("{field}:");
+    let mut output = String::with_capacity(yaml.len());
+    let mut skipping = false;
+
+    for line in yaml.split_inclusive('\n') {
+        let content = line.trim_end_matches(['\r', '\n']);
+        let is_top_level = !content.starts_with([' ', '\t']);
+
+        if !skipping && is_top_level && content.trim_end() == key {
+            skipping = true;
+            continue;
+        }
+
+        if skipping {
+            if content.is_empty() || !is_top_level {
+                continue;
+            }
+            skipping = false;
+        }
+
+        output.push_str(line);
+    }
+
+    output
+}
+
+#[cfg(test)]
+mod yaml_tests {
+    use super::remove_top_level_yaml_field;
+
+    #[test]
+    fn removes_only_requested_top_level_block() {
+        let yaml = "kind: rig_extrinsics\nper_feature_residuals:\n  target:\n    - error_px: 1.0\n  laser: []\nimage_manifest: null\n";
+        assert_eq!(
+            remove_top_level_yaml_field(yaml, "per_feature_residuals"),
+            "kind: rig_extrinsics\nimage_manifest: null\n"
+        );
+    }
+
+    #[test]
+    fn preserves_nested_fields_with_the_same_name() {
+        let yaml = "outer:\n  per_feature_residuals:\n    target: []\nnext: 1\n";
+        assert_eq!(
+            remove_top_level_yaml_field(yaml, "per_feature_residuals"),
+            yaml
+        );
+    }
 }
