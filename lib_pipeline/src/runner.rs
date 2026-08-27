@@ -158,7 +158,7 @@ pub fn run_reconstruction(
         undistorted.push(undist);
     }
 
-    let points_3d =
+    let (points_3d, binary_mask) =
         triangulate_points_multiple(&undistorted, &calibration_data).map_err(|e| e.to_string())?;
 
     let current_frame: usize = 0;
@@ -167,7 +167,9 @@ pub fn run_reconstruction(
         timestamp: current_frame,
     };
 
-    add_color_to_point_cloud(&mut cloud, &points_2d_raw[0], &first_frames[0]);
+    let filtered_points = apply_mask(&points_2d_raw[0], &binary_mask);
+
+    add_color_to_point_cloud(&mut cloud, &filtered_points, &first_frames[0]);
 
     let before = cloud.points.len();
     filter_point_cloud_by_confidence(&mut cloud, config.params.min_confidence);
@@ -241,15 +243,17 @@ pub fn run_reconstruction(
             .map(|cam| good_indices.iter().map(|&i| cam[i]).collect())
             .collect();
 
-        let points_3d = triangulate_points_multiple(&new_undistorted, &calibration_data)
-            .map_err(|e| e.to_string())?;
+        let (points_3d, binary_mask) =
+            triangulate_points_multiple(&new_undistorted, &calibration_data)
+                .map_err(|e| e.to_string())?;
 
         let mut cloud = PointCloud {
             points: points_3d,
             timestamp: frame_idx,
         };
 
-        add_color_to_point_cloud(&mut cloud, &new_points[0], &curr_frames[0]);
+        let filtered_points = apply_mask(&new_points[0], &binary_mask);
+        add_color_to_point_cloud(&mut cloud, &filtered_points, &curr_frames[0]);
 
         filter_point_cloud_by_confidence(&mut cloud, config.params.min_confidence);
 
@@ -272,4 +276,12 @@ pub fn run_reconstruction(
 
     info!("Пайплайн завершён. Обработано {} кадров", frame_idx);
     Ok(())
+}
+
+fn apply_mask<T: Copy>(list: &[T], mask: &[bool]) -> Vec<T> {
+    list.iter()
+        .enumerate()
+        .filter(|(i, _)| mask[*i])
+        .map(|(_, p)| *p)
+        .collect()
 }

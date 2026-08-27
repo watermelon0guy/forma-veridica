@@ -164,7 +164,7 @@ pub fn undistort_points(
 pub fn triangulate_points_multiple(
     points_2d: &[Vec<Point2<f64>>],
     camera_params: &RigExtrinsicsExport,
-) -> Result<Vec<PointContainer>, Box<dyn std::error::Error>> {
+) -> Result<(Vec<PointContainer>, Vec<bool>), Box<dyn std::error::Error>> {
     if points_2d.len() < 2 || camera_params.cameras.len() < 2 {
         return Err("Требуется минимум 2 камеры для триангуляции".into());
     }
@@ -214,30 +214,71 @@ pub fn triangulate_points_multiple(
         );
     }
 
-    let result = triangulate_points(points_2d, &projections);
+    // Центры камер в системе рига: C_i = (T_C_R)^{-1} · origin
+    let centers: Vec<Vector3<f64>> = camera_params
+        .cam_se3_rig
+        .iter()
+        .map(|iso| iso.inverse().translation.vector)
+        .collect();
+
+    let (points_3d, binary_mask) =
+        triangulate_points(points_2d, &projections, &centers, MIN_PARALLAX_ANGLE_DEG);
 
     // Статистика по confidence
-    let num_bad = result.iter().filter(|p| p.confidence < 0.25).count();
+    let num_bad = points_3d.iter().filter(|p| p.confidence < 0.25).count();
     trace!(
         "Триангулировано {} точек, из них {} с низкой уверенностью (< 0.25)",
-        result.len(),
+        points_3d.len(),
         num_bad
     );
 
-    Ok(result)
+    Ok((points_3d, binary_mask))
 }
 
 /// Порог reprojection error для confidence (пиксели).
 /// Точки с ошибкой выше этого получают confidence = 0.
 const REPROJ_THRESHOLD_PX: f64 = 5.0;
 
+// ХАРДКОД (13.2): порог угла триангуляции в градусах; по плану переедет в конфиг.
+// Для рига exp_2 (встречные камеры, B≈1.4 м, узкий FOV) честные точки имеют
+// угол >= ~8.6°, порог отсекает только пересечения ложных матчей
+const MIN_PARALLAX_ANGLE_DEG: f64 = 2.0;
+
+/// Проверяет, что угол между лучами «камера → точка» не меньше порога.
+/// Лучи почти параллельны => ошибка глубины ~ 1/sin(θ) => глубина — лотерея.
+/// Точка в центре камеры (луч нулевой длины) — тоже отбраковка.
+fn has_min_parallax(point: &Point3<f64>, centers: &[Vector3<f64>], min_angle_deg: f64) -> bool {
+    let cos_min = min_angle_deg.to_radians().cos();
+    let v_ref = point.coords - centers[0];
+    let d_ref = v_ref.norm();
+    if d_ref <= 1e-9 {
+        return false;
+    }
+    for center in &centers[1..] {
+        let v = point.coords - center;
+        let d = v.norm();
+        if d <= 1e-9 {
+            return false;
+        }
+        if v_ref.dot(&v) / (d_ref * d) > cos_min {
+            return false;
+        }
+    }
+    true
+}
+
 fn triangulate_points(
     points_2d: &[Vec<Point2<f64>>],
     projection_matrices: &[Matrix3x4<f64>],
-) -> Vec<PointContainer> {
+    centers: &[Vector3<f64>],
+    min_parallax_angle_deg: f64,
+) -> (Vec<PointContainer>, Vec<bool>) {
     let num_points = points_2d[0].len();
     let num_cameras = projection_matrices.len();
     let mut points_3d = Vec::with_capacity(num_points);
+    let mut binary_masks: Vec<bool> = vec![false; num_points];
+    let mut cheirality_rejected = 0usize;
+    let mut parallax_rejected = 0usize;
 
     for pt_i in 0..num_points {
         // Строим матрицу A (2N × 4) для DLT
@@ -271,6 +312,7 @@ fn triangulate_points(
 
         // Reprojection error -> confidence
         let mut total_error = 0.0f64;
+        let mut behind = false;
         for cam_i in 0..num_cameras {
             let p = &projection_matrices[cam_i];
             let orig = points_2d[cam_i][pt_i];
@@ -278,11 +320,31 @@ fn triangulate_points(
             // P * [x, y, z, 1]^T -> (proj_x, proj_y, proj_w)
             let proj_x = p[(0, 0)] * x + p[(0, 1)] * y + p[(0, 2)] * z + p[(0, 3)];
             let proj_y = p[(1, 0)] * x + p[(1, 1)] * y + p[(1, 2)] * z + p[(1, 3)];
+            // proj_w — глубина точки в системе камеры (третья строка K всегда (0,0,1))
             let proj_w = p[(2, 0)] * x + p[(2, 1)] * y + p[(2, 2)] * z + p[(2, 3)];
+
+            // Cheirality: пиксель не различает точки перед/за камерой (знак
+            // сокращается при делении), поэтому после триангуляции проверяем явно (13.1)
+            if proj_w <= 0.0 {
+                behind = true;
+                break;
+            }
 
             let err =
                 ((proj_x / proj_w - orig.x).powi(2) + (proj_y / proj_w - orig.y).powi(2)).sqrt();
             total_error += err;
+        }
+
+        if behind {
+            cheirality_rejected += 1;
+            trace!("Точка {pt_i} за камерой (cheirality), пропускаем");
+            continue;
+        }
+
+        if !has_min_parallax(&Point3::new(x, y, z), centers, min_parallax_angle_deg) {
+            parallax_rejected += 1;
+            trace!("Точка {pt_i}: угол триангуляции < {min_parallax_angle_deg}°, пропускаем");
+            continue;
         }
 
         let avg_error = total_error / num_cameras as f64;
@@ -296,9 +358,14 @@ fn triangulate_points(
         }
 
         points_3d.push(PointContainer::new(Point3::new(x, y, z), confidence));
+        binary_masks[pt_i] = true;
     }
 
-    points_3d
+    trace!(
+        "Гейты триангуляции: cheirality {cheirality_rejected}, parallax {parallax_rejected}, из {num_points} точек"
+    );
+
+    (points_3d, binary_masks)
 }
 
 /// Размерность SIFT-дескриптора (всегда 128 чисел).
@@ -739,4 +806,120 @@ pub fn match_with_epipolar_constraint(
     }
 
     (all_matches, all_keypoints)
+}
+
+#[cfg(test)]
+mod triangulation_tests {
+    use super::*;
+
+    /// Синтетическая калибровка: fx=fy=1000, (cx,cy)=(640,400), нулевая дисторсия.
+    /// Камера 0 — референс в начале координат, камера 1 — центр в (baseline, 0, 0),
+    /// оптические оси параллельны +Z. Собирается через YAML, потому что
+    /// RigExtrinsicsExport #[non_exhaustive] — как и в проде (load_calibration_from_yaml)
+    fn synthetic_export(baseline: f64) -> RigExtrinsicsExport {
+        let yaml = format!(
+            r#"kind: rig_extrinsics
+cameras:
+  - proj: null
+    dist: {{k1: 0.0, k2: 0.0, k3: 0.0, p1: 0.0, p2: 0.0, iters: 8}}
+    sensor: null
+    k: {{fx: 1000.0, fy: 1000.0, cx: 640.0, cy: 400.0, skew: 0.0}}
+    _phantom: null
+  - proj: null
+    dist: {{k1: 0.0, k2: 0.0, k3: 0.0, p1: 0.0, p2: 0.0, iters: 8}}
+    sensor: null
+    k: {{fx: 1000.0, fy: 1000.0, cx: 640.0, cy: 400.0, skew: 0.0}}
+    _phantom: null
+sensors: null
+cam_se3_rig:
+  - rotation: [0.0, 0.0, 0.0, 1.0]
+    translation: [0.0, 0.0, 0.0]
+  - rotation: [0.0, 0.0, 0.0, 1.0]
+    translation: [-{baseline}, 0.0, 0.0]
+rig_se3_target: []
+mean_reproj_error: 0.0
+per_cam_reproj_errors: [0.0, 0.0]
+per_feature_residuals: {{}}
+"#
+        );
+        serde_yml::from_str(&yaml).expect("синтетическая калибровка должна десериализоваться")
+    }
+
+    /// Проекция точки из координат камеры через K: u = cx + fx·x/z, v = cy + fy·y/z
+    fn pixel(x_cam: f64, y_cam: f64, z_cam: f64) -> Point2<f64> {
+        Point2::new(
+            640.0 + 1000.0 * x_cam / z_cam,
+            400.0 + 1000.0 * y_cam / z_cam,
+        )
+    }
+
+    #[test]
+    fn triangulates_known_point_and_keeps_mask() {
+        let export = synthetic_export(0.5);
+        // Точка (0, 0, 2): камера 0 видит её в центре, камера 1 — смещённой влево
+        let p0 = pixel(0.0, 0.0, 2.0);
+        let p1 = pixel(-0.5, 0.0, 2.0);
+        let (points, mask) = triangulate_points_multiple(&[vec![p0], vec![p1]], &export).unwrap();
+
+        assert_eq!(points.len(), 1);
+        assert_eq!(mask, vec![true]);
+        assert!((points[0].p.x - 0.0).abs() < 1e-6);
+        assert!((points[0].p.y - 0.0).abs() < 1e-6);
+        assert!((points[0].p.z - 2.0).abs() < 1e-6);
+        assert!(points[0].confidence > 0.99);
+    }
+
+    #[test]
+    fn rejects_point_behind_camera() {
+        let export = synthetic_export(0.5);
+        // Зеркальная точка (0, 0, -2): камера 0 проецирует её в тот же пиксель,
+        // что и (0, 0, 2) — репроекция знаконезависима. До 13.1 проходила с conf=1.0
+        let p0 = pixel(0.0, 0.0, -2.0);
+        let p1 = pixel(-0.5, 0.0, -2.0);
+        let (points, mask) = triangulate_points_multiple(&[vec![p0], vec![p1]], &export).unwrap();
+
+        assert!(points.is_empty());
+        assert_eq!(mask, vec![false]);
+    }
+
+    #[test]
+    fn rejects_low_parallax_but_keeps_wide_baseline() {
+        // Близкие камеры + далёкая точка: угол ~0.06° — глубина не определяется
+        let near = synthetic_export(0.1);
+        let p0 = pixel(0.0, 0.0, 100.0);
+        let p1 = pixel(-0.1, 0.0, 100.0);
+        let (points, mask) = triangulate_points_multiple(&[vec![p0], vec![p1]], &near).unwrap();
+        assert!(points.is_empty());
+        assert_eq!(mask, vec![false]);
+
+        // Та же точка при широкой базе: угол ~5.7° — проходит
+        let wide = synthetic_export(10.0);
+        let p1w = pixel(-10.0, 0.0, 100.0);
+        let (points, mask) = triangulate_points_multiple(&[vec![p0], vec![p1w]], &wide).unwrap();
+        assert_eq!(points.len(), 1);
+        assert_eq!(mask, vec![true]);
+        assert!((points[0].p.z - 100.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn mask_stays_aligned_with_cloud() {
+        let export = synthetic_export(0.5);
+        // Три точки: валидная, за камерой, с малым параллаксом
+        let p0 = vec![
+            pixel(0.0, 0.0, 2.0),
+            pixel(0.0, 0.0, -2.0),
+            pixel(0.0, 0.0, 1000.0),
+        ];
+        let p1 = vec![
+            pixel(-0.5, 0.0, 2.0),
+            pixel(-0.5, 0.0, -2.0),
+            pixel(-0.5, 0.0, 1000.0),
+        ];
+        let (points, mask) = triangulate_points_multiple(&[p0, p1], &export).unwrap();
+
+        assert_eq!(points.len(), mask.iter().filter(|m| **m).count());
+        assert_eq!(mask, vec![true, false, false]);
+        // Единственная выжившая — первая: порядок «облако ↔ маска» не поехал
+        assert!((points[0].p.z - 2.0).abs() < 1e-6);
+    }
 }
